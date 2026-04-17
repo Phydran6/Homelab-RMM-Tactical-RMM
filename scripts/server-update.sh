@@ -3,7 +3,7 @@
 # server-update.sh
 # Installiert unkritische Updates automatisch, kritische manuell
 # ==============================================================================
-# Autor:    Phil <it@phytech.de>
+# Autor:    Phydran6
 # Version:  2026-01-05
 # System:   Debian/Ubuntu
 # ==============================================================================

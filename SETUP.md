@@ -224,4 +224,4 @@ git remote set-url origin git@github.com:yourusername/homelab-infrastructure.git
 
 **Viel Erfolg mit deinem Homelab Infrastructure Repository! 🚀**
 
-Bei Fragen: it@phytech.de
+Bei Fragen: Erstelle ein Issue auf GitHub

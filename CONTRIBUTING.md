@@ -111,7 +111,7 @@ Wir suchen besonders nach Hilfe in:
 
 Bei Fragen:
 - Erstelle ein Issue mit dem Label `question`
-- Kontaktiere den Maintainer: it@phytech.de
+- Erstelle ein Issue auf GitHub
 
 ## 📜 Code of Conduct
 

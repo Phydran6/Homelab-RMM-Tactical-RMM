@@ -1,6 +1,6 @@
 # HOMELAB INFRASTRUCTURE DOKUMENTATION
 
-**Phil Fischer | it@phytech.de | phytech.de**  
+**Phydran6**  
 **Stand: Februar 2026**
 
 ---
@@ -173,7 +173,7 @@ sudo docker exec -it trmm-backend python manage.py shell
 ```python
 # Python-Befehle:
 from accounts.models import User
-User.objects.create_superuser('admin', 'it@phytech.de', 'password')
+User.objects.create_superuser('admin', 'admin@example.com', 'password')
 exit()
 ```
 
@@ -256,7 +256,7 @@ Zwei komplementÃ¤re Scripts fÃ¼r sichere System-Updates mit automatischer Ka
 # update-check.sh
 # Prueft auf Updates und kategorisiert nach Prioritaet
 # ==============================================================================
-# Autor:    Phil <it@phytech.de>
+# Autor:    Phydran6
 # Version:  2026-01-05
 # System:   Debian/Ubuntu
 # ==============================================================================
@@ -316,7 +316,7 @@ Installiert automatisch nur unkritische Pakete, zeigt kritische mit Installation
 # server-update.sh
 # Installiert unkritische Updates automatisch, kritische manuell
 # ==============================================================================
-# Autor:    Phil <it@phytech.de>
+# Autor:    Phydran6
 # Version:  2026-01-05
 # System:   Debian/Ubuntu
 # ==============================================================================
@@ -631,7 +631,7 @@ docker compose up -d
 # 6. User via Shell erstellen (Init dauert 5-10min!)
 sudo docker exec -it trmm-backend python manage.py shell
 # from accounts.models import User
-# User.objects.create_superuser('admin', 'mail@phytech.de', 'pass')
+# User.objects.create_superuser('admin', 'admin@example.com', 'pass')
 ```
 
 ---
@@ -649,4 +649,4 @@ sudo docker exec -it trmm-backend python manage.py shell
 ---
 
 *Dokumentation erstellt: Februar 2026*  
-*Phil Fischer | it@phytech.de | phytech.de*
+*Phydran6*

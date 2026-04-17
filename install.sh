@@ -3,7 +3,7 @@
 # install.sh
 # Quick Installation Script für Homelab Infrastructure
 # ==============================================================================
-# Autor:    Phil <it@phytech.de>
+# Autor:    Phydran6
 # Version:  2026-02-01
 # System:   Debian/Ubuntu
 # ==============================================================================

@@ -11,7 +11,7 @@
 
 **Automatisierte System-Verwaltung und Monitoring für Homelab-Umgebungen**
 
-Entwickelt von [Phil Fischer](mailto:it@phytech.de) | [phytech.de](https://phytech.de)
+Entwickelt von [Phydran6](https://github.com/Phydran6)
 
 ---
 
@@ -254,17 +254,8 @@ Dieses Projekt ist unter der MIT License lizenziert - siehe [LICENSE](LICENSE) D
 
 ## 👤 Autor
 
-**Phil Fischer**
-- 📧 Email: it@phytech.de
-- 🌐 Website: [phytech.de](https://phytech.de)
-- 💼 GitHub: [@yourusername](https://github.com/yourusername)
-
-## 🙏 Danksagungen
-
-- [Tactical RMM](https://github.com/amidaware/tacticalrmm) - Exzellente Open-Source RMM-Lösung
-- [Pi-hole](https://pi-hole.net/) - Network-wide Ad Blocking
-- [Let's Encrypt](https://letsencrypt.org/) - Kostenlose SSL-Zertifikate
-- [Debian Project](https://www.debian.org/) - Stabiles Betriebssystem
+**Phydran6**
+- 💼 GitHub: [@Phydran6](https://github.com/Phydran6)
 
 ## 📚 Weitere Ressourcen
 
@@ -301,7 +292,7 @@ Dieses Projekt ist unter der MIT License lizenziert - siehe [LICENSE](LICENSE) D
 
 **⭐ Wenn dir dieses Projekt geholfen hat, gib ihm einen Star!**
 
-Made with ❤️ by [Phil Fischer](https://phytech.de)
+Made with ❤️ by [Phydran6](https://github.com/Phydran6)
 
 [Report Bug](https://github.com/yourusername/homelab-infrastructure/issues) • [Request Feature](https://github.com/yourusername/homelab-infrastructure/issues) • [Documentation](docs/Homelab-Infrastructure-Dokumentation.md)
 

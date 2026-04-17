@@ -36,7 +36,7 @@ Dieser Verhaltenskodex gilt in allen Community-Räumen und gilt auch, wenn eine 
 
 ## Durchsetzung
 
-Fälle von missbräuchlichem, belästigendem oder anderweitig inakzeptablem Verhalten können an die für die Durchsetzung verantwortlichen Community-Leitenden unter it@phytech.de gemeldet werden. Alle Beschwerden werden umgehend und fair überprüft und untersucht.
+Fälle von missbräuchlichem, belästigendem oder anderweitig inakzeptablem Verhalten können an die für die Durchsetzung verantwortlichen Community-Leitenden über GitHub Issues gemeldet werden. Alle Beschwerden werden umgehend und fair überprüft und untersucht.
 
 Alle Community-Leitenden sind verpflichtet, die Privatsphäre und Sicherheit des Meldenden eines Vorfalls zu respektieren.
 

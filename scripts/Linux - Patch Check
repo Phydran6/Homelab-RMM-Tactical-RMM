@@ -3,7 +3,7 @@
 # apt-smart-update.sh
 # Intelligentes Update-System mit interaktivem Timeout-Menue
 # ==============================================================================
-# Autor:    Philipp Fischer <it@phytech.de>
+# Autor:    Phydran6
 # Version:  2026.02.04.20.03.00
 # System:   Debian/Ubuntu (apt-basiert)
 # ==============================================================================

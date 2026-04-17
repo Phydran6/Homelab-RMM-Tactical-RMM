@@ -20,7 +20,7 @@ Wenn du eine Sicherheitslücke entdeckt hast, kontaktiere uns bitte direkt:
 
 ### Kontakt
 
-- **Email:** it@phytech.de
+- **GitHub:** [@Phydran6](https://github.com/Phydran6)
 - **Betreff:** `[SECURITY] Vulnerability in homelab-infrastructure`
 
 ### Was solltest du in deinem Bericht angeben?
