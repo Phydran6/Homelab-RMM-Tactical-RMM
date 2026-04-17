@@ -51,8 +51,8 @@ Dieses Repository enthält eine vollständige Dokumentation und Automatisierungs
 ### One-Line Installation
 
 ```bash
-git clone https://github.com/yourusername/homelab-infrastructure.git && \
-cd homelab-infrastructure && \
+git clone https://github.com/Phydran6/Homelab-RMM-Tactical-RMM.git && \
+cd Homelab-RMM-Tactical-RMM.git && \
 sudo ./install.sh
 ```
 
@@ -60,7 +60,7 @@ sudo ./install.sh
 
 1. **Repository klonen**
 ```bash
-git clone https://github.com/yourusername/homelab-infrastructure.git
+git clone https://github.com/Phydran6/Homelab-RMM-Tactical-RMM.git
 cd homelab-infrastructure
 ```
 
