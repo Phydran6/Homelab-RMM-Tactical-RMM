@@ -96,6 +96,17 @@ Die vollständige Dokumentation findest du in [`docs/Homelab-Infrastructure-Doku
 7. [Troubleshooting](docs/Homelab-Infrastructure-Dokumentation.md#7-troubleshooting)
 8. [Quick Reference](docs/Homelab-Infrastructure-Dokumentation.md#8-quick-reference)
 
+## 🛠️ Wartung & Updates
+
+Schritt-für-Schritt-Anleitungen für wiederkehrende Wartungsaufgaben:
+
+| Anleitung | Beschreibung |
+|-----------|--------------|
+| [01 – SSL-Zertifikat erneuern](wartung/01-ssl-zertifikat-erneuern.md) | Wildcard-Zertifikat mit Certbot erneuern und in TRMM & NPM eintragen |
+| [02 – TRMM Update](wartung/02-trmm-update.md) | Tactical RMM Docker-Installation aktualisieren |
+
+---
+
 ## 🔧 Update-Scripts
 
 ### `update-check.sh` - Update-Prüfung
@@ -220,6 +231,9 @@ homelab-infrastructure/
 ├── 📄 CODE_OF_CONDUCT.md            # Code of Conduct
 ├── 📄 SECURITY.md                    # Security Policy
 ├── 🔧 install.sh                     # Quick Install Script
+├── 📂 wartung/                       # Wartungs- & Update-Anleitungen
+│   ├── 📖 01-ssl-zertifikat-erneuern.md
+│   └── 📖 02-trmm-update.md
 ├── 📂 scripts/
 │   ├── 📜 update-check.sh           # Update-Prüfung
 │   └── 📜 server-update.sh          # Automatische Installation
