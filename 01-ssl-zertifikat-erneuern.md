@@ -167,43 +167,58 @@ Sollte das neue Ablaufdatum zeigen (ca. 90 Tage in der Zukunft).
 
 ## Teil 3: Zertifikat in NPM aktualisieren
 
-### 3.1 Zertifikat-Dateien anzeigen
+> ⚠️ **Alle Befehle in diesem Teil werden auf der RMM-VM ausgeführt** – dort wo Certbot die Zertifikate erstellt hat und wo sie unter `/etc/letsencrypt/live/` liegen.
 
-Jeden Befehl **einzeln** ausführen und Ausgabe separat kopieren:
+### 3.1 Zertifikat-Inhalte auf der RMM-VM anzeigen
+
+Jeden Befehl **einzeln** ausführen und die Ausgabe jeweils **separat** in eine eigene Datei speichern (nächster Schritt):
 
 ```bash
-# 1. Certificate (für NPM-Feld "Certificate"):
+# 1. Domain-Zertifikat:
 sudo cat /etc/letsencrypt/live/example.com/cert.pem
 ```
-→ Ausgabe kopieren (alles von `-----BEGIN CERTIFICATE-----` bis `-----END CERTIFICATE-----`)
+→ Ausgabe beginnt mit `-----BEGIN CERTIFICATE-----` und endet mit `-----END CERTIFICATE-----`
 
 ```bash
-# 2. Certificate Key (für NPM-Feld "Certificate Key"):
+# 2. Private Key:
 sudo cat /etc/letsencrypt/live/example.com/privkey.pem
 ```
-→ Ausgabe kopieren (alles von `-----BEGIN PRIVATE KEY-----` bis `-----END PRIVATE KEY-----`)
+→ Ausgabe beginnt mit `-----BEGIN PRIVATE KEY-----` und endet mit `-----END PRIVATE KEY-----`
 
 ```bash
-# 3. Intermediate Certificate (für NPM-Feld "Intermediate Certificate"):
+# 3. Intermediate Certificate (ebenfalls auf der RMM-VM, gleicher Pfad):
 sudo cat /etc/letsencrypt/live/example.com/chain.pem
 ```
-→ Ausgabe kopieren (alles von `-----BEGIN CERTIFICATE-----` bis `-----END CERTIFICATE-----`)
+→ Ausgabe beginnt mit `-----BEGIN CERTIFICATE-----` und endet mit `-----END CERTIFICATE-----`
 
-### 3.2 In NPM importieren
+### 3.2 Ausgaben als lokale .pem-Dateien speichern
+
+Der NPM Custom Upload Assistant erwartet fertige Dateien – **kein Copy-Paste in Textfelder**.  
+Speichere die Ausgaben der drei Befehle jeweils vollständig (inkl. `-----BEGIN...` und `-----END...`) als eigene Datei auf deinem lokalen Rechner:
+
+| Dateiname (lokal speichern als) | Inhalt aus Befehl | Verwendung in NPM |
+|----------------------------------|-------------------|-------------------|
+| `npm-cert.pem` | Ausgabe von `cert.pem` | Certificate |
+| `npm-privkey.pem` | Ausgabe von `privkey.pem` | Certificate Key |
+| `npm-chain.pem` | Ausgabe von `chain.pem` | Intermediate Certificate |
+
+> 💡 Die Namen der lokalen Dateien sind frei wählbar – die obigen Namen helfen, Verwechslungen mit den Originaldateien auf der RMM-VM zu vermeiden.
+
+### 3.3 In NPM importieren
 
 1. NPM Web-UI öffnen
 2. **SSL Certificates** → **Add SSL Certificate** → **Custom**
-3. Felder ausfüllen:
+3. Im Custom Upload Assistant die drei Dateien auswählen:
 
-| NPM-Feld | Datei-Inhalt |
+| NPM-Feld | Lokale Datei |
 |----------|--------------|
-| Certificate | `cert.pem` |
-| Certificate Key | `privkey.pem` |
-| Intermediate Certificate | `chain.pem` |
+| Certificate | `npm-cert.pem` |
+| Certificate Key | `npm-privkey.pem` |
+| Intermediate Certificate | `npm-chain.pem` |
 
 4. Speichern
 
-> 💡 Falls NPM nur 2 Felder hat (ohne Intermediate), nutze `fullchain.pem` statt `cert.pem`.
+> 💡 Falls NPM nur 2 Felder hat (ohne Intermediate), erstelle stattdessen `npm-fullchain.pem` aus der Ausgabe von `fullchain.pem` und nutze diese als Certificate.
 
 ### 3.3 Proxy Hosts aktualisieren
 
@@ -253,15 +268,17 @@ sudo docker compose down
 sudo docker compose up -d
 
 # ============================================
-# TEIL 3: Zertifikate für NPM (einzeln ausführen!)
+# TEIL 3: Zertifikate für NPM (auf der RMM-VM ausführen, einzeln!)
+# Ausgaben jeweils als npm-cert.pem / npm-privkey.pem / npm-chain.pem
+# lokal speichern und dann in NPM hochladen.
 # ============================================
-# 1. Certificate:
+# 1. Domain-Zertifikat → lokal als npm-cert.pem speichern:
 sudo cat /etc/letsencrypt/live/example.com/cert.pem
 
-# 2. Certificate Key:
+# 2. Private Key → lokal als npm-privkey.pem speichern:
 sudo cat /etc/letsencrypt/live/example.com/privkey.pem
 
-# 3. Intermediate Certificate:
+# 3. Intermediate Certificate → lokal als npm-chain.pem speichern:
 sudo cat /etc/letsencrypt/live/example.com/chain.pem
 ```
 
