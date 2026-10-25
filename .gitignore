@@ -1,0 +1,5 @@
+# Echte Konfiguration mit Passwoertern nie committen
+opt/trmm/.env
+opt/trmm/.env.bak-*
+opt/trmm/docker-compose.yml.bak-*
+opt/trmm/docker-compose.override.yml

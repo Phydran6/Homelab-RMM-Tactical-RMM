@@ -6,7 +6,7 @@
 
 | Komponente | Details |
 |------------|---------|
-| RMM-VM | Debian/Ubuntu mit Docker, Verzeichnis `~/trmm` |
+| RMM-VM | Debian/Ubuntu mit Docker, Projekt unter `/opt/trmm` (install.sh) |
 | Reverse Proxy | Nginx Proxy Manager (separate VM/Container) |
 | Domain | `example.com` (bei DNS-Provider ohne API) |
 | Subdomains | `rmm.example.com`, `api.example.com`, `mesh.example.com` |
@@ -37,7 +37,6 @@ sudo apt install certbot -y
 ```bash
 sudo certbot certonly --manual \
   --preferred-challenges dns-01 \
-  --manual-public-ip-logging-ok \
   -d "*.example.com" \
   -m admin@example.com \
   --agree-tos
@@ -103,62 +102,56 @@ Erwartete Dateien:
 
 ## Teil 2: Zertifikate in Tactical RMM eintragen
 
-### 2.1 Berechtigungen fixen (falls nötig)
+### 2.1 Mit trmmctl (empfohlen)
 
 ```bash
-# Falls Verzeichnis root gehört:
-sudo chown -R $USER:$USER ~/trmm
-
-# Prüfen:
-ls -la ~/trmm/
+sudo trmmctl cert example.com
 ```
 
-### 2.2 Alte Zertifikat-Einträge entfernen
+Das erledigt in einem Schritt:
+
+- `.env` sichern (`/opt/trmm/.env.bak-<datum>`)
+- `CERT_PUB_KEY` / `CERT_PRIV_KEY` als Base64 aus `fullchain.pem` / `privkey.pem` ersetzen (keine doppelten Zeilen)
+- Stack neu starten (`docker compose down` + `up -d`)
+
+> 💡 Die Domain kann weggelassen werden, wenn `CERT_DOMAIN` in `/etc/default/trmm` gesetzt ist (macht der Installer).
+
+Zusätzlich die Dateien für NPM (Teil 3) ablegen:
 
 ```bash
-cd ~/trmm
+sudo trmmctl cert --export /root/npm-certs
+```
+
+### 2.2 Manuell (Alternative)
+
+```bash
+cd /opt/trmm
 
 # Backup machen
-cp .env .env.backup.$(date +%Y%m%d)
+sudo cp -p .env .env.backup.$(date +%Y%m%d)
 
 # Alte CERT-Zeilen entfernen
-sed -i '/CERT_PUB_KEY/d' .env
-sed -i '/CERT_PRIV_KEY/d' .env
-```
+sudo sed -i '/^CERT_PUB_KEY=/d; /^CERT_PRIV_KEY=/d' .env
 
-### 2.3 Neue Zertifikate als Base64 eintragen
+# Neue Zertifikate als Base64 eintragen
+echo "CERT_PUB_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/example.com/fullchain.pem)" | sudo tee -a .env >/dev/null
+echo "CERT_PRIV_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/example.com/privkey.pem)" | sudo tee -a .env >/dev/null
 
-```bash
-cd ~/trmm
+# Sollte genau EINE Zeile für jeden Key zeigen:
+sudo grep -c "^CERT_" .env
 
-# Public Key (fullchain.pem) als Base64:
-echo "CERT_PUB_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/example.com/fullchain.pem)" >> .env
-
-# Private Key (privkey.pem) als Base64:
-echo "CERT_PRIV_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/example.com/privkey.pem)" >> .env
+# Container neu starten
+sudo trmmctl restart
 ```
 
 > 💡 Ersetze `example.com` mit deiner Domain.
 
-### 2.4 Prüfen ob alles stimmt
-
-```bash
-# Sollte genau EINE Zeile für jeden Key zeigen:
-grep "CERT_" .env
-```
-
-### 2.5 Container neu starten
-
-```bash
-cd ~/trmm
-sudo docker compose down
-sudo docker compose up -d
-```
-
-### 2.6 Zertifikat testen
+### 2.3 Zertifikat testen
 
 ```bash
 echo | openssl s_client -servername api.example.com -connect api.example.com:443 2>/dev/null | openssl x509 -noout -dates
+# oder
+sudo trmmctl status
 ```
 
 Sollte das neue Ablaufdatum zeigen (ca. 90 Tage in der Zukunft).
@@ -168,6 +161,8 @@ Sollte das neue Ablaufdatum zeigen (ca. 90 Tage in der Zukunft).
 ## Teil 3: Zertifikat in NPM aktualisieren
 
 > ⚠️ **Alle Befehle in diesem Teil werden auf der RMM-VM ausgeführt** – dort wo Certbot die Zertifikate erstellt hat und wo sie unter `/etc/letsencrypt/live/` liegen.
+
+> 💡 **Kurzweg:** `sudo trmmctl cert --export /root/npm-certs` legt `npm-cert.pem`, `npm-privkey.pem`, `npm-chain.pem` und `npm-fullchain.pem` direkt ab. Per `scp` holen, in NPM hochladen (3.3), danach `sudo rm -rf /root/npm-certs`.
 
 ### 3.1 Zertifikat-Inhalte auf der RMM-VM anzeigen
 
@@ -220,7 +215,7 @@ Speichere die Ausgaben der drei Befehle jeweils vollständig (inkl. `-----BEGIN.
 
 > 💡 Falls NPM nur 2 Felder hat (ohne Intermediate), erstelle stattdessen `npm-fullchain.pem` aus der Ausgabe von `fullchain.pem` und nutze diese als Certificate.
 
-### 3.3 Proxy Hosts aktualisieren
+### 3.4 Proxy Hosts aktualisieren
 
 Für alle drei Proxy Hosts:
 - `rmm.example.com`
@@ -242,7 +237,7 @@ Jeweils:
 # ============================================
 # TEIL 1: Zertifikat anfordern
 # ============================================
-sudo certbot certonly --manual --preferred-challenges dns-01 --manual-public-ip-logging-ok -d "*.example.com" -m admin@example.com --agree-tos
+sudo certbot certonly --manual --preferred-challenges dns-01 -d "*.example.com" -m admin@example.com --agree-tos
 
 # DNS prüfen (in neuem Terminal):
 dig TXT _acme-challenge.example.com
@@ -251,21 +246,9 @@ dig TXT _acme-challenge.example.com
 sudo ls -la /etc/letsencrypt/live/example.com/
 
 # ============================================
-# TEIL 2: Cert in TRMM eintragen
+# TEIL 2: Cert in TRMM eintragen (+ Dateien fuer NPM)
 # ============================================
-sudo chown -R $USER:$USER ~/trmm
-cd ~/trmm
-cp .env .env.backup.$(date +%Y%m%d)
-sed -i '/CERT_PUB_KEY/d' .env
-sed -i '/CERT_PRIV_KEY/d' .env
-
-echo "CERT_PUB_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/example.com/fullchain.pem)" >> .env
-echo "CERT_PRIV_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/example.com/privkey.pem)" >> .env
-
-grep "CERT_" .env
-
-sudo docker compose down
-sudo docker compose up -d
+sudo trmmctl cert example.com --export /root/npm-certs
 
 # ============================================
 # TEIL 3: Zertifikate für NPM (auf der RMM-VM ausführen, einzeln!)
@@ -309,16 +292,12 @@ Der bisherige Registrar bleibt erhalten, nur die Nameserver zeigen auf Cloudflar
 ### Zertifikat wird nicht erkannt nach Neustart
 
 ```bash
-sudo docker compose logs tactical-nginx
+sudo trmmctl logs nginx
 ```
 
-### Permission denied bei docker compose
+### Permission denied
 
-```bash
-# Entweder sudo verwenden oder User zur docker-Gruppe hinzufügen:
-sudo usermod -aG docker $USER
-# Danach neu einloggen!
-```
+`/opt/trmm/.env` gehört root (Rechte 600) – `trmmctl` immer mit `sudo` aufrufen.
 
 ### DNS-Challenge schlägt fehl
 

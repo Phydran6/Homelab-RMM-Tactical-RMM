@@ -1,0 +1,9 @@
+[Unit]
+Description=Update-Pruefung mit Kategorisierung (update-check)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/update-check
+# Ausgabe: journalctl -u update-check

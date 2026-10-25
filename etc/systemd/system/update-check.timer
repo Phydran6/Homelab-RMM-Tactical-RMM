@@ -1,0 +1,10 @@
+[Unit]
+Description=Taegliche Update-Pruefung
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

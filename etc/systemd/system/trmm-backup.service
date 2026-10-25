@@ -1,0 +1,10 @@
+[Unit]
+Description=Tactical RMM Backup (trmmctl backup)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/trmmctl backup
+Nice=10
+IOSchedulingClass=idle

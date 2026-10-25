@@ -1,11 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# apt-smart-update.sh
+# apt-smart-update
 # Intelligentes Update-System mit interaktivem Timeout-Menue
 # ==============================================================================
 # Autor:    Phydran6
-# Version:  2026.02.04.20.03.00
+# Version:  2026.10.25
 # System:   Debian/Ubuntu (apt-basiert)
+# Pfad:     /usr/local/sbin/apt-smart-update (auch als TRMM-Script nutzbar)
 # ==============================================================================
 #
 # FUNKTIONSWEISE:
@@ -16,7 +17,8 @@
 #
 # KATEGORISIERUNG:
 #   AUTOMATISCH  - Pakete die das System nicht destabilisieren koennen
-#   MANUELL      - Kernel, Bootloader, Init, Core-Libs, Paketmanager
+#   MANUELL      - Kernel, Bootloader, Init, Core-Libs, Paketmanager,
+#                  Docker-Engine (Update startet alle Container neu)
 #
 # ==============================================================================
 
@@ -36,6 +38,7 @@ KRITISCH_PATTERN+="|libc6|libc-bin|libc-dev|libgcc|libstdc\+\+|ld-linux"
 KRITISCH_PATTERN+="|libpam|libnss|libcrypt|libselinux"
 KRITISCH_PATTERN+="|apt|dpkg|libapt|apt-utils"
 KRITISCH_PATTERN+="|base-files|bash|coreutils|util-linux|login|passwd"
+KRITISCH_PATTERN+="|docker|docker\.io|containerd|containerd\.io|runc"
 KRITISCH_PATTERN+="|glibc|eglibc)(-|$)"
 
 # Farben
@@ -54,14 +57,19 @@ fi
 # Optionen (Defaults)
 CHECK_ONLY=false
 FORCE_KRITISCH=false
-QUIET=false
+VERBOSE=false
 CLEANUP=true
+
+# Unbeaufsichtigt (TRMM): keine Dialoge, geaenderte Config-Dateien behalten
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS=(-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
 # ------------------------------------------------------------------------------
 # Funktionen
 # ------------------------------------------------------------------------------
 log() {
-    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    local msg
+    msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
     echo "$msg" >> "$LOGFILE" 2>/dev/null || true
 }
 
@@ -87,17 +95,17 @@ timeout_prompt() {
     # Prompt mit Countdown anzeigen
     echo -ne "${frage} [${default_text}] ${GRAU}(${TIMEOUT}s)${RESET} "
     
-    if read -t $TIMEOUT -n 1 eingabe 2>/dev/null; then
+    if read -r -t "$TIMEOUT" -n 1 eingabe 2>/dev/null; then
         echo ""  # Newline nach Eingabe
         case "$eingabe" in
             [JjYy]) printf -v "$varname" "true" ;;
             [Nn])   printf -v "$varname" "false" ;;
-            *)      printf -v "$varname" "$default_val" ;;
+            *)      printf -v "$varname" "%s" "$default_val" ;;
         esac
         echo -e "  ${GRUEN}→${RESET} $([ "${!varname}" = "true" ] && echo "Ja" || echo "Nein")"
     else
         # Timeout - Default verwenden
-        printf -v "$varname" "$default_val"
+        printf -v "$varname" "%s" "$default_val"
         echo -e "${GRAU}timeout${RESET}"
         echo -e "  ${BLAU}→${RESET} Default: $([ "${!varname}" = "true" ] && echo "Ja" || echo "Nein")"
     fi
@@ -106,6 +114,22 @@ timeout_prompt() {
 
 ist_kritisch() {
     echo "$1" | grep -qiE "$KRITISCH_PATTERN"
+}
+
+# Upgrade ohne die Auto-Markierung zu verlieren: apt install markiert Pakete
+# als "manuell", dann raeumt autoremove alte Abhaengigkeiten nie mehr auf
+# Usage: upgrade_pakete paket1 paket2 ...
+upgrade_pakete() {
+    local auto_markiert rc=0
+    auto_markiert=$(apt-mark showauto 2>/dev/null || true)
+    if $VERBOSE; then
+        apt-get install --only-upgrade "${APT_OPTS[@]}" "$@" 2>&1 \
+            | grep -vE "^(Reading|Building)" || rc=${PIPESTATUS[0]}
+    else
+        apt-get install --only-upgrade "${APT_OPTS[@]}" "$@" >/dev/null 2>&1 || rc=$?
+    fi
+    printf '%s\n' "$@" | grep -Fxf <(echo "$auto_markiert") | xargs -r apt-mark auto >/dev/null || true
+    return "$rc"
 }
 
 # ------------------------------------------------------------------------------
@@ -138,8 +162,6 @@ echo ""
 
 timeout_prompt "Nur pruefen ohne Installation?" "n" "CHECK_ONLY"
 timeout_prompt "Ausfuehrliche Ausgabe?" "n" "VERBOSE"
-QUIET=true
-$VERBOSE && QUIET=false
 
 timeout_prompt "Cache aufraeumen nach Update?" "j" "CLEANUP"
 
@@ -161,7 +183,8 @@ echo ""
 # ------------------------------------------------------------------------------
 # Updates ermitteln
 # ------------------------------------------------------------------------------
-UPDATES=$(apt list --upgradable 2>/dev/null | grep "/" | sort)
+# "|| true": ohne Updates findet grep nichts und pipefail wuerde das Script beenden
+UPDATES=$(apt list --upgradable 2>/dev/null | grep "/" | sort || true)
 
 if [[ -z "$UPDATES" ]]; then
     echo -e "${GRUEN}System ist aktuell - keine Updates verfuegbar${RESET}"
@@ -244,13 +267,7 @@ if [[ ${#AUTO[@]} -gt 0 ]]; then
     echo -e "Installiere ${GRUEN}${#AUTO[@]}${RESET} unkritische Pakete..."
     echo ""
     
-    if $VERBOSE; then
-        apt-get install -y "${AUTO[@]}" 2>&1 | grep -vE "^(Reading|Building)"
-    else
-        apt-get install -y "${AUTO[@]}" >/dev/null 2>&1
-    fi
-    
-    if [[ $? -eq 0 ]]; then
+    if upgrade_pakete "${AUTO[@]}"; then
         echo -e "${GRUEN}OK${RESET} - Unkritische Updates installiert"
         log "Installiert: ${AUTO[*]}"
     else
@@ -285,12 +302,12 @@ if [[ ${#KRITISCH[@]} -gt 0 ]]; then
         # Sicherheitsabfrage mit längerem Timeout
         echo -ne "Wirklich fortfahren? [j/N] ${GRAU}(5s)${RESET} "
         
-        if read -t 5 -n 1 confirm 2>/dev/null; then
+        if read -r -t 5 -n 1 confirm 2>/dev/null; then
             echo ""
             if [[ "$confirm" =~ ^[JjYy]$ ]]; then
                 echo ""
                 echo "Installiere kritische Pakete..."
-                if apt-get install -y "${KRITISCH[@]}"; then
+                if VERBOSE=true upgrade_pakete "${KRITISCH[@]}"; then
                     echo ""
                     echo -e "${GRUEN}OK${RESET} - Kritische Updates installiert"
                     echo -e "${ROT}${FETT}*** NEUSTART EMPFOHLEN ***${RESET}"
@@ -307,7 +324,7 @@ if [[ ${#KRITISCH[@]} -gt 0 ]]; then
         fi
     else
         echo "Manuell installieren mit:"
-        echo -e "  ${FETT}sudo apt install ${KRITISCH[*]}${RESET}"
+        echo -e "  ${FETT}sudo apt install --only-upgrade ${KRITISCH[*]}${RESET}"
     fi
     echo ""
 fi
@@ -319,7 +336,7 @@ if $CLEANUP; then
     echo -e "${FETT}--- AUFRAEUMEN ---${RESET}"
     echo ""
     echo -n "Cache bereinigen... "
-    apt-get autoclean -qq 2>/dev/null
+    apt-get autoclean -qq 2>/dev/null || true
     echo -e "${GRUEN}OK${RESET}"
     
     echo -n "Ungenutzte Pakete entfernen... "

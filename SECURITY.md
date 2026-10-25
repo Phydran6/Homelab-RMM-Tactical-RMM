@@ -21,7 +21,7 @@ Wenn du eine Sicherheitslücke entdeckt hast, kontaktiere uns bitte direkt:
 ### Kontakt
 
 - **GitHub:** [@Phydran6](https://github.com/Phydran6)
-- **Betreff:** `[SECURITY] Vulnerability in homelab-infrastructure`
+- **Betreff:** `[SECURITY] Vulnerability in Homelab-RMM-Tactical-RMM`
 
 ### Was solltest du in deinem Bericht angeben?
 
@@ -59,14 +59,15 @@ Bitte gib so viele der folgenden Informationen wie möglich an:
 
 1. **Aktualisiere regelmäßig**
    ```bash
-   git pull origin main
-   sudo cp scripts/*.sh /usr/local/bin/
+   sudo trmmctl self-update     # Scripts + Compose-File
+   sudo trmmctl update          # Tactical RMM
    ```
 
 2. **Prüfe Scripts vor Ausführung**
    ```bash
-   shellcheck scripts/*.sh
-   cat scripts/server-update.sh  # Code Review
+   curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh -o install.sh
+   less install.sh               # Code Review vor "sudo bash install.sh"
+   shellcheck install.sh usr/local/bin/* usr/local/sbin/*
    ```
 
 3. **Minimale Berechtigungen**
@@ -75,14 +76,13 @@ Bitte gib so viele der folgenden Informationen wie möglich an:
 
 4. **Sensitive Daten schützen**
    - Speichere keine Passwörter in Scripts
-   - Nutze `.env` Dateien für Credentials
+   - Nutze `.env` Dateien für Credentials (`/opt/trmm/.env` hat Rechte 600)
    - Füge `.env` zur `.gitignore` hinzu
 
 5. **Backup vor Updates**
    ```bash
-   # Backup kritischer Configs
-   sudo cp -r /etc/letsencrypt ~/backup/
-   sudo cp ~/tactical-rmm/.env ~/backup/
+   sudo trmmctl backup          # DB, MeshCentral, Zertifikate, .env
+   sudo cp -r /etc/letsencrypt /var/backups/
    ```
 
 ### Für Contributors
@@ -113,7 +113,8 @@ Bitte gib so viele der folgenden Informationen wie möglich an:
 
 ### Im Scope
 
-- Scripts in `/scripts/` Verzeichnis
+- `install.sh` und Scripts unter `usr/local/`
+- `opt/trmm/docker-compose.yml`
 - Dokumentation die zu unsicheren Konfigurationen führen könnte
 - Dependencies mit bekannten CVEs
 

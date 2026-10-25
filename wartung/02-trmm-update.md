@@ -1,19 +1,20 @@
 # Tactical RMM Update (Docker)
 
-> **Anwendungsfall:** Update einer Docker-basierten Tactical RMM Installation mit `VERSION=latest` in der .env Datei.
+> **Anwendungsfall:** Update der Docker-basierten Tactical RMM Installation unter `/opt/trmm` (eingerichtet mit `install.sh`).
 
 ## Übersicht
 
 | Komponente | Details |
 |------------|---------|
-| RMM-VM | Debian/Ubuntu mit Docker, Verzeichnis `~/trmm` |
-| .env Einstellung | `VERSION=latest` |
+| RMM-VM | Debian/Ubuntu mit Docker, Projekt unter `/opt/trmm` |
+| .env Einstellung | `VERSION=<release>` (vom Installer gepinnt, z.B. `1.5.2`) |
+| Werkzeug | `trmmctl update` |
 
 ## Voraussetzungen
 
 - SSH-Zugang zur RMM-VM
 - VM-Snapshot erstellt (Rollback-Möglichkeit)
-- SSL-Zertifikat aktuell (siehe separate Anleitung)
+- SSL-Zertifikat aktuell (siehe [01 – SSL-Zertifikat erneuern](01-ssl-zertifikat-erneuern.md))
 
 ---
 
@@ -32,75 +33,43 @@ Neue Agent-Versionen können bei einigen Antivirus-Programmen Fehlalarme auslös
 
 ## Schritt 2: Update durchführen
 
-> 💡 **Hinweis:** Da `VERSION=latest` in der `.env` gesetzt ist, reicht es die neuen Images zu pullen. Die `docker-compose.yml` muss nicht geändert werden.
+```bash
+sudo trmmctl update            # neuestes Release von GitHub
+sudo trmmctl update 1.5.2      # oder eine bestimmte Version
+```
+
+`trmmctl update`:
+
+1. ermittelt das neueste Release (`api.github.com/repos/amidaware/tacticalrmm/releases/latest`)
+2. erstellt ein Backup nach `/var/backups/trmm/` (überspringen: `--no-backup`)
+3. setzt `VERSION` in `/opt/trmm/.env` und lädt die Images – schlägt der Pull fehl, wird `VERSION` zurückgesetzt
+4. erstellt die Container neu (`docker compose up -d`)
+5. löscht ungenutzte alte TRMM-Images
+
+> 💡 Steht in der `.env` noch `VERSION=latest`, zieht `trmmctl update` einfach das neueste `latest`. Empfohlen ist eine feste Version – dann ist jederzeit klar, was läuft.
+
+Die Datenbank-Images (`postgres:18-alpine`, `redis:8-alpine`, `mongo:8.0`) bekommen dabei automatisch ihre Patch-Updates innerhalb der Major-Version.
+
+Init beobachten (5-10 Minuten):
 
 ```bash
-cd ~/trmm
-
-# Neue Images holen (VERSION=latest zieht automatisch neueste Version)
-sudo docker compose pull
-
-# Container neu starten mit neuen Images
-sudo docker compose down
-sudo docker compose up -d
-
-# Status prüfen - alle Container sollten "Up" oder "running" zeigen
-sudo docker compose ps
+sudo trmmctl logs init
 ```
 
 ---
 
-## Schritt 3: Alte Images aufräumen
-
-Nach dem Update bleiben alte Images auf der Festplatte. Diese können gelöscht werden:
+## Schritt 3: Update verifizieren
 
 ```bash
-# Zeigt ungenutzte Images an
-sudo docker images
-
-# Alle ungenutzten Images löschen
-sudo docker image prune -a
-
-# Bestätigen mit 'y'
+sudo trmmctl status
 ```
 
-Alternativ nur bestimmte Images löschen:
-
-```bash
-# Bestimmtes Image löschen (Image-ID aus 'docker images' kopieren)
-sudo docker rmi <IMAGE_ID>
-
-# Mehrere auf einmal
-sudo docker rmi <IMAGE_ID_1> <IMAGE_ID_2> <IMAGE_ID_3>
-```
-
-Komplettes Docker-Cleanup (Images, Container, Volumes, Networks):
-
-```bash
-# VORSICHT: Löscht alles Ungenutzte!
-sudo docker system prune -a
-```
+- Alle Container `Up` / `running`
+- Im Browser: oben links sollte die neue Version stehen
 
 ---
 
-## Schritt 4: Update verifizieren
-
-### 4.1 Web-UI prüfen
-
-1. Im Browser Tactical RMM Web-UI öffnen
-2. Oben links sollte die neue Version stehen
-
-### 4.2 Container-Status prüfen
-
-```bash
-sudo docker compose ps
-```
-
-Alle Container sollten `Up` oder `running` zeigen.
-
----
-
-## Schritt 5: Agents testen (optional)
+## Schritt 4: Agents testen (optional)
 
 > 💡 **Hinweis:** Falls die Agents bereits auf der aktuellen Version sind, ist dieser Schritt nicht nötig. Prüfe in der Web-UI unter **Agents** die Agent-Version.
 
@@ -118,6 +87,30 @@ Falls Agents noch auf alter Version:
 
 ---
 
+## Scripts & Compose-File aktualisieren
+
+Unabhängig vom TRMM-Release kann das Compose-File dieses Repos (z.B. neue Image-Versionen, Healthchecks) aktualisiert werden:
+
+```bash
+sudo trmmctl self-update
+```
+
+Das führt den Online-Installer erneut aus. `/opt/trmm/.env` bleibt unverändert, eine geänderte `docker-compose.yml` wird vorher als `docker-compose.yml.bak-<datum>` gesichert.
+
+### Major-Version einer Datenbank wechseln
+
+Beispiel PostgreSQL 18 → 19:
+
+```bash
+sudo trmmctl backup
+sudo sed -i 's/^POSTGRES_VERSION=.*/POSTGRES_VERSION=19/' /opt/trmm/.env
+sudo trmmctl migrate-db
+```
+
+`migrate-db` startet die alte Version auf dem alten Volume, erstellt einen Dump, importiert ihn in ein neues Volume (`trmm_postgres19_data`) und startet den Stack. Das alte Volume bleibt als Rollback erhalten.
+
+---
+
 ## Schnellreferenz - Alle Befehle
 
 ```bash
@@ -127,21 +120,16 @@ Falls Agents noch auf alter Version:
 
 # 1. In Web-UI: Automatische Agent-Updates DEAKTIVIEREN!
 
-# 2. Update durchführen
-cd ~/trmm
-sudo docker compose pull
-sudo docker compose down
-sudo docker compose up -d
+# 2. Update (inkl. Backup und Image-Cleanup)
+sudo trmmctl update
 
-# 3. Status prüfen
-sudo docker compose ps
+# 3. Status / Init prüfen
+sudo trmmctl status
+sudo trmmctl logs init
 
-# 4. Alte Images aufräumen
-sudo docker image prune -a
-
-# 5. In Web-UI: Version prüfen
-# 6. In Web-UI: Agent-Versionen prüfen (evtl. schon aktuell)
-# 7. In Web-UI: Automatische Agent-Updates wieder AKTIVIEREN
+# 4. In Web-UI: Version prüfen
+# 5. In Web-UI: Agent-Versionen prüfen (evtl. schon aktuell)
+# 6. In Web-UI: Automatische Agent-Updates wieder AKTIVIEREN
 ```
 
 ---
@@ -151,20 +139,24 @@ sudo docker image prune -a
 ### Update zeigt alte Version
 
 ```bash
-# Images wurden nicht neu gezogen. Nochmal pullen:
-sudo docker compose pull
-sudo docker compose down
-sudo docker compose up -d
+sudo trmmctl compose pull
+sudo trmmctl restart
 ```
 
 ### Container starten nicht
 
 ```bash
-# Logs prüfen
-sudo docker compose logs
+sudo trmmctl doctor
+sudo trmmctl logs            # alle
+sudo trmmctl logs backend    # einzelner Dienst
+```
 
-# Einzelnen Container prüfen (z.B. backend)
-sudo docker compose logs tactical-backend
+### "Volume ... fehlt, es gibt aber ..."
+
+Die Datenbank-Version in der `.env` passt nicht zu den vorhandenen Volumes:
+
+```bash
+sudo trmmctl migrate-db
 ```
 
 ### Agent-Update schlägt fehl
@@ -176,6 +168,12 @@ sudo docker compose logs tactical-backend
 
 ### Rollback
 
+```bash
+# Backup von vor dem Update einspielen (VERSION in .env ggf. zurücksetzen)
+ls -lt /var/backups/trmm/
+sudo trmmctl restore /var/backups/trmm/trmm-<datum>.tar
+```
+
 Falls alles schiefgeht → VM-Snapshot zurückspielen.
 
 ---
@@ -183,11 +181,10 @@ Falls alles schiefgeht → VM-Snapshot zurückspielen.
 ## Checkliste nach dem Update
 
 - [ ] Neue Version in Web-UI bestätigt
-- [ ] Alle Container laufen
+- [ ] Alle Container laufen (`trmmctl status`)
 - [ ] Agent-Versionen geprüft
 - [ ] Automatische Agent-Updates wieder aktiviert
 - [ ] VM-Snapshot kann gelöscht werden (oder behalten)
-- [ ] Alte Docker Images aufgeräumt
 
 ---
 

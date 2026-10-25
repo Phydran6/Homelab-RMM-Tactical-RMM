@@ -14,7 +14,7 @@
 #   - Root-Rechte erforderlich
 #
 # Verwendung:
-#   sudo ./resize-disk.sh
+#   sudo pve-disk-resize
 #
 # Ablauf:
 #   1. Deaktiviert Swap und entfernt alte Swap-Einträge
@@ -24,7 +24,8 @@
 #   5. Erstellt 2GB Swap-Datei
 #
 # Autor:   PF
-# Version: 20260118153633
+# Version: 20261025
+# Pfad:    /usr/local/sbin/pve-disk-resize (auch als TRMM-Script nutzbar)
 # ==============================================================================
 
 export PATH="/sbin:/usr/sbin:$PATH"
@@ -45,11 +46,18 @@ trap 'echo "FEHLER in Zeile $LINENO"; debug_info' ERR
 # Root-Partition ermitteln
 ROOT_PART=$(findmnt -n -o SOURCE /)
 ROOT_NUM=$(echo "$ROOT_PART" | grep -o '[0-9]*$')
-START=$(fdisk -l /dev/sda | grep "^${ROOT_PART}" | awk '{print ($2=="*") ? $3 : $2}')
+
+# Platte aus der Root-Partition ableiten (sda, vda, nvme0n1 ...) statt fest /dev/sda
+case "$ROOT_PART" in
+    /dev/mapper/*|/dev/dm-*) echo "Root liegt auf LVM/dm - wird nicht unterstuetzt"; exit 1 ;;
+esac
+DISK="/dev/$(lsblk -no PKNAME "$ROOT_PART")"
+PART_PREFIX="${ROOT_PART%"$ROOT_NUM"}"   # /dev/sda bzw. /dev/nvme0n1p
+START=$(fdisk -l "$DISK" | grep "^${ROOT_PART}" | awk '{print ($2=="*") ? $3 : $2}')
 
 echo "=== Proxmox Debian Disk Resize ==="
 echo "Root: $ROOT_PART (Start: $START)"
-lsblk /dev/sda
+lsblk "$DISK"
 
 # 1. Swap aus
 swapoff -a 2>/dev/null || true
@@ -58,12 +66,12 @@ sed -i '/swap/d' /etc/fstab
 
 # 2. Alte Partitionen löschen (5, 3, 2 falls vorhanden)
 for p in 5 3 2; do
-    [ -b "/dev/sda$p" ] && [ "$p" -gt "$ROOT_NUM" ] && yes | parted /dev/sda rm $p 2>/dev/null || true
+    [ -b "${PART_PREFIX}${p}" ] && [ "$p" -gt "$ROOT_NUM" ] && yes | parted "$DISK" rm $p 2>/dev/null || true
 done
 
 # 3. Root-Partition erweitern (fdisk)
-echo -e "d\nn\np\n${ROOT_NUM}\n${START}\n\na\nw" | fdisk /dev/sda >/dev/null 2>&1 || true
-partprobe /dev/sda 2>/dev/null || true
+echo -e "d\nn\np\n${ROOT_NUM}\n${START}\n\na\nw" | fdisk "$DISK" >/dev/null 2>&1 || true
+partprobe "$DISK" 2>/dev/null || true
 
 # 4. Dateisystem erweitern
 resize2fs "$ROOT_PART"
@@ -77,6 +85,6 @@ grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fsta
 
 echo ""
 echo "=== FERTIG ==="
-lsblk /dev/sda
+lsblk "$DISK"
 df -h /
 free -h

@@ -1,0 +1,716 @@
+#!/bin/bash
+# ==============================================================================
+# trmmctl
+# Verwaltung der Tactical RMM Docker-Installation unter /opt/trmm
+# ==============================================================================
+# Autor:    Phydran6
+# Version:  2026-10-25
+# System:   Debian/Ubuntu mit Docker Engine + Compose v2
+# ==============================================================================
+# Konfiguration: /etc/default/trmm
+# Hilfe:         trmmctl help
+# ==============================================================================
+
+set -euo pipefail
+
+# ------------------------------------------------------------------------------
+# Konfiguration (Defaults, ueberschreibbar in /etc/default/trmm)
+# ------------------------------------------------------------------------------
+CONFIG_FILE=/etc/default/trmm
+TRMM_DIR=/opt/trmm
+BACKUP_DIR=/var/backups/trmm
+BACKUP_KEEP=7
+CERT_DOMAIN=
+TRMM_REPO=Phydran6/Homelab-RMM-Tactical-RMM
+TRMM_REF=main
+# shellcheck source=/dev/null
+[[ -r $CONFIG_FILE ]] && . "$CONFIG_FILE"
+
+ENV_FILE="$TRMM_DIR/.env"
+HELPER_IMAGE="alpine:3"
+UPSTREAM_API="https://api.github.com/repos/amidaware/tacticalrmm/releases/latest"
+YES=0
+
+# Farben nur im Terminal
+if [[ -t 1 ]]; then
+    ROT='\033[0;31m' GRUEN='\033[0;32m' GELB='\033[0;33m' BLAU='\033[0;34m'
+    FETT='\033[1m' RESET='\033[0m'
+else
+    ROT='' GRUEN='' GELB='' BLAU='' FETT='' RESET=''
+fi
+
+# ------------------------------------------------------------------------------
+# Hilfsfunktionen
+# ------------------------------------------------------------------------------
+info() { echo -e "${BLAU}=>${RESET} $*"; }
+ok()   { echo -e "${GRUEN}OK${RESET} $*"; }
+warn() { echo -e "${GELB}WARNUNG${RESET} $*" >&2; }
+die()  { echo -e "${ROT}FEHLER${RESET} $*" >&2; exit 1; }
+
+need_root() {
+    [[ $EUID -eq 0 ]] || die "Bitte als root ausfuehren: sudo trmmctl $*"
+}
+
+need_docker() {
+    command -v docker >/dev/null 2>&1 || die "docker nicht gefunden"
+    docker compose version >/dev/null 2>&1 || die "Docker Compose v2 Plugin fehlt"
+}
+
+# Ja/Nein-Abfrage ueber /dev/tty, --yes ueberspringt sie
+confirm() {
+    local frage=$1 antwort=""
+    [[ $YES -eq 1 ]] && return 0
+    [[ -r /dev/tty ]] || die "Keine Konsole fuer Rueckfrage - mit --yes bestaetigen"
+    read -r -p "$frage [j/N] " antwort </dev/tty
+    [[ $antwort =~ ^[JjYy]$ ]]
+}
+
+# docker compose im Projektverzeichnis (laedt .env und docker-compose.override.yml)
+compose() {
+    (cd "$TRMM_DIR" && docker compose "$@")
+}
+
+# Wert aus der .env lesen (umschliessende Anfuehrungszeichen werden entfernt)
+env_get() {
+    local val
+    val=$(sed -n "s/^$1=//p" "$ENV_FILE" | tail -n 1)
+    val=${val%\"}; val=${val#\"}
+    val=${val%\'}; val=${val#\'}
+    printf '%s' "$val"
+}
+
+# Wert in der .env setzen oder anhaengen (awk statt sed wegen Base64-Inhalten)
+env_set() {
+    local tmp
+    tmp=$(mktemp "$ENV_FILE.XXXXXX")
+    KEY=$1 VAL=$2 awk '
+        BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"]; done = 0 }
+        index($0, k "=") == 1 { if (!done) { print k "=" v; done = 1 }; next }
+        { print }
+        END { if (!done) print k "=" v }
+    ' "$ENV_FILE" >"$tmp"
+    chmod 600 "$tmp"
+    mv "$tmp" "$ENV_FILE"
+}
+
+load_env() {
+    [[ -f $ENV_FILE ]] || die "$ENV_FILE fehlt - zuerst install.sh ausfuehren"
+    PROJECT=$(env_get COMPOSE_PROJECT_NAME); PROJECT=${PROJECT:-trmm}
+    PG_VER=$(env_get POSTGRES_VERSION);      PG_VER=${PG_VER:-18}
+    MONGO_VER=$(env_get MONGO_VERSION);      MONGO_VER=${MONGO_VER:-8.0}
+    API_HOST=$(env_get API_HOST)
+    PG_VOLUME="${PROJECT}_postgres${PG_VER}_data"
+    MONGO_VOLUME="${PROJECT}_mongo${MONGO_VER}_data"
+}
+
+volume_exists() {
+    docker volume inspect "$1" >/dev/null 2>&1
+}
+
+container_running() {
+    [[ $(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null) == "true" ]]
+}
+
+# Wartet bis der Healthcheck eines Containers "healthy" meldet
+wait_healthy() {
+    local name=$1 timeout=${2:-180} status=""
+    info "Warte auf $name ..."
+    while (( timeout > 0 )); do
+        status=$(docker inspect -f '{{.State.Health.Status}}' "$name" 2>/dev/null || true)
+        [[ $status == "healthy" ]] && return 0
+        sleep 3
+        timeout=$((timeout - 3))
+    done
+    die "$name wird nicht healthy (Status: ${status:-unbekannt}) - siehe: trmmctl logs ${name#trmm-}"
+}
+
+# Alte Datenbank-Volumes desselben Projekts finden (ohne das aktuelle Ziel)
+# $1 = postgres|mongo, $2 = Ziel-Volume
+db_volume_candidates() {
+    local kind=$1 target=$2 v rest
+    while IFS= read -r v; do
+        [[ $v == "$target" ]] && continue
+        [[ $v == "${PROJECT}_${kind}"*"_data" ]] || continue
+        rest=${v#"${PROJECT}_${kind}"}
+        rest=${rest%_data}
+        [[ -z $rest || $rest =~ ^[0-9.]+$ ]] && echo "$v"
+    done < <(docker volume ls -q)
+    return 0
+}
+
+# Bricht ab, wenn noch ein Container das Volume nutzt
+# (zwei Datenbank-Prozesse auf denselben Dateien zerstoeren die Daten)
+ensure_volume_unused() {
+    local users
+    users=$(docker ps --filter "volume=$1" --format '{{.Names}}' | tr '\n' ' ')
+    [[ -z $users ]] || die "Volume $1 wird noch verwendet von: $users
+       Alten Stack zuerst stoppen: docker compose down (im alten Verzeichnis)"
+}
+
+# Verhindert, dass der Stack auf einem leeren DB-Volume startet,
+# waehrend die echten Daten noch in einem Volume einer anderen Version liegen
+check_db_volumes() {
+    local cands
+    if ! volume_exists "$PG_VOLUME"; then
+        cands=$(db_volume_candidates postgres "$PG_VOLUME")
+        [[ -n $cands ]] && die "PostgreSQL-Volume $PG_VOLUME fehlt, es gibt aber: $(echo "$cands" | tr '\n' ' ')
+       Daten zuerst uebernehmen mit: trmmctl migrate-db"
+    fi
+    if ! volume_exists "$MONGO_VOLUME"; then
+        cands=$(db_volume_candidates mongo "$MONGO_VOLUME")
+        [[ -n $cands ]] && die "MongoDB-Volume $MONGO_VOLUME fehlt, es gibt aber: $(echo "$cands" | tr '\n' ' ')
+       Daten zuerst uebernehmen mit: trmmctl migrate-db"
+    fi
+    return 0
+}
+
+cpu_has_avx() {
+    grep -qw avx /proc/cpuinfo 2>/dev/null
+}
+
+check_mongo_cpu() {
+    if (( ${MONGO_VER%%.*} >= 5 )) && ! cpu_has_avx; then
+        die "MONGO_VERSION=$MONGO_VER braucht AVX, die CPU meldet keins.
+       Proxmox: VM herunterfahren -> Hardware -> Prozessor -> Typ 'host' oder 'x86-64-v3'."
+    fi
+}
+
+latest_release() {
+    curl -fsSL "$UPSTREAM_API" 2>/dev/null \
+        | sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1 || true
+}
+
+# ------------------------------------------------------------------------------
+# Stack
+# ------------------------------------------------------------------------------
+cmd_up() {
+    need_docker; load_env
+    check_db_volumes
+    check_mongo_cpu
+    compose up -d --remove-orphans
+    ok "Stack gestartet - die Initialisierung kann 5-10 Minuten dauern (trmmctl logs init)"
+}
+
+cmd_status() {
+    need_docker; load_env
+    echo -e "${FETT}Tactical RMM${RESET}  $TRMM_DIR  (Projekt: $PROJECT)"
+    echo "TRMM-Version:  $(env_get VERSION)"
+    echo "PostgreSQL:    $PG_VER   Volume: $PG_VOLUME"
+    echo "MongoDB:       $MONGO_VER  Volume: $MONGO_VOLUME"
+    echo "Redis:         $(env_get REDIS_VERSION)"
+    echo ""
+    compose ps --format 'table {{.Name}}\t{{.Image}}\t{{.Status}}'
+    echo ""
+    local port end
+    port=$(env_get TRMM_HTTPS_PORT); port=${port:-443}
+    end=$(echo | timeout 5 openssl s_client -connect "127.0.0.1:$port" -servername "$API_HOST" 2>/dev/null \
+        | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+    echo "Zertifikat:    ${end:-nicht erreichbar}"
+    if [[ -d $BACKUP_DIR ]]; then
+        # shellcheck disable=SC2012
+        echo "Letztes Backup: $(ls -1t "$BACKUP_DIR"/trmm-*.tar 2>/dev/null | head -n 1 || true)"
+    fi
+}
+
+cmd_logs() {
+    need_docker
+    local svc=() s
+    for s in "$@"; do
+        [[ $s == tactical-* ]] || s="tactical-$s"
+        svc+=("$s")
+    done
+    compose logs -f --tail=200 "${svc[@]}"
+}
+
+# ------------------------------------------------------------------------------
+# Update
+# ------------------------------------------------------------------------------
+cmd_update() {
+    need_docker; load_env
+    local target="" do_backup=1 current arg
+    for arg in "$@"; do
+        case $arg in
+            --no-backup) do_backup=0 ;;
+            -*)          die "Unbekannte Option: $arg" ;;
+            *)           target=${arg#v} ;;
+        esac
+    done
+
+    current=$(env_get VERSION)
+    if [[ -z $target ]]; then
+        if [[ $current == "latest" ]]; then
+            target=latest
+        else
+            target=$(latest_release)
+            [[ -n $target ]] || die "Neueste Version nicht ermittelbar - Version angeben: trmmctl update 1.5.2"
+        fi
+    fi
+
+    check_db_volumes
+    check_mongo_cpu
+
+    echo ""
+    echo -e "${FETT}TRMM Update${RESET}: $current -> $target"
+    echo -e "${GELB}Vorher in der Web-UI deaktivieren:${RESET} Settings -> Global Settings ->"
+    echo "  'Enable agent automatic self update' (neue Agents erst manuell testen)"
+    echo ""
+    confirm "Update jetzt durchfuehren?" || { echo "Abgebrochen"; exit 0; }
+
+    if [[ $do_backup -eq 1 ]] && container_running trmm-postgres; then
+        cmd_backup
+    fi
+
+    env_set VERSION "$target"
+    info "Images laden ..."
+    if ! compose pull; then
+        env_set VERSION "$current"
+        die "Pull fehlgeschlagen - VERSION auf $current zurueckgesetzt"
+    fi
+    info "Container neu erstellen ..."
+    compose up -d --remove-orphans
+
+    info "Alte Images aufraeumen ..."
+    docker image prune -f >/dev/null
+    local img
+    while IFS= read -r img; do
+        [[ $img == *":$target" || $img == *":<none>" ]] && continue
+        docker rmi "$img" >/dev/null 2>&1 || true
+    done < <(docker images --format '{{.Repository}}:{{.Tag}}' --filter "reference=$(env_get IMAGE_REPO)tactical*" 2>/dev/null)
+
+    ok "Update auf $target gestartet - Init laeuft (trmmctl logs init)"
+    echo "Danach: Version in der Web-UI pruefen, Test-Agents updaten,"
+    echo "        Agent-Auto-Update wieder aktivieren."
+}
+
+# ------------------------------------------------------------------------------
+# Zertifikat
+# ------------------------------------------------------------------------------
+cmd_cert() {
+    need_docker; load_env
+    local domain="" export_dir="" restart=1 arg
+    while [[ $# -gt 0 ]]; do
+        arg=$1; shift
+        case $arg in
+            --export)     [[ $# -gt 0 ]] || die "--export braucht ein Verzeichnis"
+                          export_dir=$1; shift ;;
+            --no-restart) restart=0 ;;
+            -*)           die "Unbekannte Option: $arg" ;;
+            *)            domain=$arg ;;
+        esac
+    done
+    domain=${domain:-$CERT_DOMAIN}
+    domain=${domain:-${API_HOST#*.}}
+
+    local live="/etc/letsencrypt/live/$domain"
+    [[ -r $live/fullchain.pem && -r $live/privkey.pem ]] \
+        || die "Kein Zertifikat unter $live - zuerst mit certbot erstellen (siehe wartung/01)"
+
+    info "Zertifikat: $live"
+    openssl x509 -in "$live/fullchain.pem" -noout -subject -enddate | sed 's/^/   /'
+
+    cp -p "$ENV_FILE" "$ENV_FILE.bak-$(date +%Y%m%d-%H%M%S)"
+    env_set CERT_PUB_KEY "$(base64 -w 0 "$live/fullchain.pem")"
+    env_set CERT_PRIV_KEY "$(base64 -w 0 "$live/privkey.pem")"
+    ok "CERT_PUB_KEY / CERT_PRIV_KEY in $ENV_FILE aktualisiert (Backup: .env.bak-*)"
+
+    # Dateien fuer den Upload in Nginx Proxy Manager
+    if [[ -n $export_dir ]]; then
+        install -d -m 700 "$export_dir"
+        install -m 600 "$live/cert.pem" "$export_dir/npm-cert.pem"
+        install -m 600 "$live/privkey.pem" "$export_dir/npm-privkey.pem"
+        install -m 600 "$live/chain.pem" "$export_dir/npm-chain.pem"
+        install -m 600 "$live/fullchain.pem" "$export_dir/npm-fullchain.pem"
+        ok "NPM-Dateien in $export_dir (npm-cert/privkey/chain/fullchain.pem) - nach Upload loeschen!"
+    fi
+
+    if [[ $restart -eq 1 ]]; then
+        info "Stack neu starten ..."
+        check_db_volumes
+        compose down
+        compose up -d
+        ok "Neu gestartet"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Backup / Restore
+# ------------------------------------------------------------------------------
+cmd_backup() {
+    need_docker; load_env
+    container_running trmm-postgres || die "trmm-postgres laeuft nicht"
+    container_running trmm-mongodb || die "trmm-mongodb laeuft nicht"
+    docker inspect trmm-meshcentral >/dev/null 2>&1 || die "Container trmm-meshcentral fehlt"
+
+    install -d -m 700 "$BACKUP_DIR"
+    local ts work out
+    ts=$(date +%Y%m%d-%H%M%S)
+    work=$(mktemp -d "$BACKUP_DIR/.tmp-XXXXXX")
+    out="$BACKUP_DIR/trmm-$ts.tar"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$work'" EXIT
+
+    info "Backup -> $out"
+    docker exec trmm-postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d tacticalrmm -Fc' >"$work/postgres.dump"
+    docker exec trmm-mongodb sh -c 'mongodump --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --db meshcentral --archive --gzip' >"$work/mongo.archive.gz"
+
+    # nur persistente Daten - der Programmcode kommt beim Start aus dem Image
+    docker run --rm --volumes-from trmm-meshcentral:ro -v "$work":/backup "$HELPER_IMAGE" sh -c '
+        cd / && set --
+        for p in opt/tactical/certs opt/tactical/tmp opt/tactical/reporting \
+                 opt/tactical/api/tacticalrmm/private home/node/app/meshcentral-data; do
+            [ -e "$p" ] && set -- "$@" "$p"
+        done
+        tar czf /backup/volumes.tar.gz "$@"'
+
+    cp -p "$ENV_FILE" "$work/env"
+    cp -p "$TRMM_DIR/docker-compose.yml" "$work/"
+    [[ -f $TRMM_DIR/docker-compose.override.yml ]] && cp -p "$TRMM_DIR/docker-compose.override.yml" "$work/"
+    {
+        echo "date=$ts"
+        echo "trmm_version=$(env_get VERSION)"
+        echo "postgres_version=$PG_VER"
+        echo "mongo_version=$MONGO_VER"
+    } >"$work/INFO"
+
+    tar cf "$out" -C "$work" .
+    chmod 600 "$out"
+    rm -rf "$work"
+    trap - EXIT
+    ok "Backup erstellt ($(du -h "$out" | cut -f1))"
+
+    # alte Backups entfernen
+    local alt
+    # shellcheck disable=SC2012
+    ls -1t "$BACKUP_DIR"/trmm-*.tar 2>/dev/null | tail -n +"$((BACKUP_KEEP + 1))" | while IFS= read -r alt; do
+        rm -f "$alt"
+        info "Entfernt: $alt"
+    done
+}
+
+cmd_restore() {
+    need_docker; load_env
+    local file=${1:-}
+    [[ -n $file && -f $file ]] || die "Backup-Datei angeben: trmmctl restore $BACKUP_DIR/trmm-<datum>.tar"
+    check_mongo_cpu
+
+    warn "Restore ueberschreibt die aktuelle Datenbank und MeshCentral-Daten!"
+    confirm "Wirklich aus $file wiederherstellen?" || { echo "Abgebrochen"; exit 0; }
+
+    local work
+    work=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$work'" EXIT
+    tar xf "$file" -C "$work"
+    [[ -f $work/postgres.dump && -f $work/mongo.archive.gz ]] || die "Ungueltiges Backup"
+
+    info "Stack stoppen ..."
+    compose down
+    compose up -d tactical-postgres tactical-mongodb
+    wait_healthy trmm-postgres
+    wait_healthy trmm-mongodb
+
+    info "PostgreSQL wiederherstellen ..."
+    docker exec -i trmm-postgres sh -c 'pg_restore -U "$POSTGRES_USER" -d tacticalrmm --clean --if-exists --no-owner' <"$work/postgres.dump"
+
+    info "MongoDB wiederherstellen ..."
+    docker exec -i trmm-mongodb sh -c 'mongorestore --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --archive --gzip --nsInclude "meshcentral.*" --drop' <"$work/mongo.archive.gz"
+
+    info "Volumes wiederherstellen ..."
+    compose create tactical-meshcentral >/dev/null
+    docker run --rm --volumes-from trmm-meshcentral -v "$work":/backup:ro "$HELPER_IMAGE" \
+        tar xzf /backup/volumes.tar.gz -C /
+
+    compose up -d
+    rm -rf "$work"
+    trap - EXIT
+    ok "Wiederhergestellt - Init laeuft (trmmctl logs init)"
+}
+
+# ------------------------------------------------------------------------------
+# Datenbank-Migration (alte Images -> aktuelle Major-Versionen)
+# ------------------------------------------------------------------------------
+migrate_cleanup() {
+    docker rm -f trmm-migrate-pg trmm-migrate-mongo >/dev/null 2>&1 || true
+}
+
+# Ermittelt Unterpfad und Version des PGDATA in einem Volume
+# Ausgabe: "<unterpfad> <version>"  (unterpfad leer = Upstream-Layout)
+pg_inspect_volume() {
+    docker run --rm -v "$1":/v:ro "$HELPER_IMAGE" sh -c '
+        for p in /v /v/data /v/*/docker; do
+            if [ -f "$p/PG_VERSION" ]; then echo "${p#/v} $(cat "$p/PG_VERSION")"; exit 0; fi
+        done
+        exit 1'
+}
+
+migrate_pg() {
+    local src="" sub ver best=0 v info dump
+    if volume_exists "$PG_VOLUME"; then
+        ok "PostgreSQL: $PG_VOLUME existiert bereits - nichts zu tun"
+        return 0
+    fi
+    for v in $(db_volume_candidates postgres "$PG_VOLUME"); do
+        info=$(pg_inspect_volume "$v") || continue
+        if (( ${info##* } > best )); then
+            best=${info##* }; src=$v; sub=${info% *}
+        fi
+    done
+    if [[ -z $src ]]; then
+        ok "PostgreSQL: kein altes Volume gefunden - nichts zu migrieren"
+        return 0
+    fi
+    ver=$best
+    info "PostgreSQL $ver ($src) -> $PG_VER ($PG_VOLUME)"
+    ensure_volume_unused "$src"
+
+    docker run -d --name trmm-migrate-pg --network none \
+        -e PGDATA="/pgvol$sub" -v "$src":/pgvol "postgres:${ver}-alpine" >/dev/null
+    local i
+    for i in $(seq 1 60); do
+        docker exec trmm-migrate-pg pg_isready -q 2>/dev/null && break
+        [[ $i -eq 60 ]] && die "Alter PostgreSQL-Container startet nicht: docker logs trmm-migrate-pg"
+        sleep 2
+    done
+
+    dump="$BACKUP_DIR/migrate-postgres${ver}-$(date +%Y%m%d-%H%M%S).sql.gz"
+    info "Dump -> $dump"
+    POSTGRES_USER=$(env_get POSTGRES_USER) docker exec -e POSTGRES_USER trmm-migrate-pg \
+        sh -c 'pg_dump -U "$POSTGRES_USER" -d tacticalrmm --no-owner --no-privileges' | gzip >"$dump"
+    chmod 600 "$dump"
+    docker rm -f trmm-migrate-pg >/dev/null
+
+    compose up -d tactical-postgres
+    wait_healthy trmm-postgres
+    info "Import in PostgreSQL $PG_VER ..."
+    gzip -dc "$dump" | docker exec -i trmm-postgres \
+        sh -c 'psql -q -U "$POSTGRES_USER" -d tacticalrmm -v ON_ERROR_STOP=1' >/dev/null
+
+    local tables
+    tables=$(docker exec trmm-postgres sh -c \
+        "psql -tA -U \"\$POSTGRES_USER\" -d tacticalrmm -c \"select count(*) from information_schema.tables where table_schema='public'\"")
+    [[ $tables -gt 0 ]] || die "Import fehlgeschlagen - keine Tabellen in $PG_VOLUME"
+    ok "PostgreSQL migriert ($tables Tabellen). Altes Volume $src bleibt erhalten."
+}
+
+migrate_mongo() {
+    local src="" ver owner dump rest
+    if volume_exists "$MONGO_VOLUME"; then
+        ok "MongoDB: $MONGO_VOLUME existiert bereits - nichts zu tun"
+        return 0
+    fi
+    src=$(db_volume_candidates mongo "$MONGO_VOLUME" | sort -V | tail -n 1)
+    if [[ -z $src ]]; then
+        ok "MongoDB: kein altes Volume gefunden - nichts zu migrieren"
+        return 0
+    fi
+    # Upstream-Volume ohne Version im Namen ist immer mongo:4.4
+    rest=${src#"${PROJECT}_mongo"}; rest=${rest%_data}
+    ver=${rest:-4.4}
+    if (( ${ver%%.*} >= 5 )) && ! cpu_has_avx; then
+        die "Quell-Volume braucht MongoDB $ver (AVX), CPU hat kein AVX"
+    fi
+    info "MongoDB $ver ($src) -> $MONGO_VER ($MONGO_VOLUME)"
+    ensure_volume_unused "$src"
+
+    # mit dem Besitzer des Volumes starten, damit die alten Daten unveraendert bleiben
+    owner=$(docker run --rm -v "$src":/v:ro "$HELPER_IMAGE" stat -c '%u:%g' /v)
+    local user_opt=()
+    [[ $owner != "0:0" ]] && user_opt=(--user "$owner")
+    MONGO_INITDB_ROOT_USERNAME=$(env_get MONGODB_USER) MONGO_INITDB_ROOT_PASSWORD=$(env_get MONGODB_PASSWORD) \
+        docker run -d --name trmm-migrate-mongo --network none "${user_opt[@]}" \
+        -e MONGO_INITDB_ROOT_USERNAME -e MONGO_INITDB_ROOT_PASSWORD \
+        -v "$src":/data/db "mongo:$ver" >/dev/null
+    local i ping='mongosh --quiet --eval "db.adminCommand(\"ping\").ok" 2>/dev/null || mongo --quiet --eval "db.adminCommand(\"ping\").ok"'
+    for i in $(seq 1 60); do
+        docker exec trmm-migrate-mongo sh -c "$ping" >/dev/null 2>&1 && break
+        [[ $i -eq 60 ]] && die "Alter MongoDB-Container startet nicht: docker logs trmm-migrate-mongo"
+        sleep 2
+    done
+
+    dump="$BACKUP_DIR/migrate-mongo${ver}-$(date +%Y%m%d-%H%M%S).archive.gz"
+    info "Dump -> $dump"
+    docker exec trmm-migrate-mongo sh -c 'mongodump --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --db meshcentral --archive --gzip' >"$dump"
+    chmod 600 "$dump"
+    docker rm -f trmm-migrate-mongo >/dev/null
+
+    compose up -d tactical-mongodb
+    wait_healthy trmm-mongodb
+    # beim allerersten Start startet mongod nach dem Anlegen des Users neu -> Retry
+    info "Import in MongoDB $MONGO_VER ..."
+    for i in 1 2 3 4 5; do
+        if docker exec -i trmm-mongodb sh -c 'mongorestore --quiet -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --archive --gzip --nsInclude "meshcentral.*" --drop' <"$dump"; then
+            ok "MongoDB migriert. Altes Volume $src bleibt erhalten."
+            return 0
+        fi
+        sleep 5
+    done
+    die "MongoDB-Import fehlgeschlagen (Dump liegt unter $dump)"
+}
+
+cmd_migrate_db() {
+    need_docker; load_env
+    check_mongo_cpu
+    install -d -m 700 "$BACKUP_DIR"
+
+    echo -e "${FETT}Datenbank-Migration${RESET}"
+    echo "  Ziel PostgreSQL: $PG_VOLUME"
+    echo "  Ziel MongoDB:    $MONGO_VOLUME"
+    echo "  Die alten Volumes werden nicht veraendert und bleiben als Rollback erhalten."
+    confirm "Stack dafuer stoppen und migrieren?" || { echo "Abgebrochen"; exit 0; }
+
+    trap migrate_cleanup EXIT
+    compose down
+    migrate_pg
+    migrate_mongo
+    migrate_cleanup
+    trap - EXIT
+
+    compose up -d --remove-orphans
+    ok "Migration abgeschlossen - Init laeuft (trmmctl logs init)"
+    echo "Wenn alles laeuft, alte Volumes entfernen: docker volume ls | grep $PROJECT"
+}
+
+# ------------------------------------------------------------------------------
+# Diagnose
+# ------------------------------------------------------------------------------
+cmd_doctor() {
+    local fehler=0 dns_fehler=0 h ip mem end
+    echo -e "${FETT}Systemcheck${RESET}"
+
+    if command -v docker >/dev/null 2>&1; then
+        ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?')"
+        if docker compose version >/dev/null 2>&1; then
+            ok "Compose $(docker compose version --short)"
+        else
+            warn "Docker Compose v2 Plugin fehlt"; fehler=1
+        fi
+    else
+        warn "Docker nicht installiert"; fehler=1
+    fi
+
+    if [[ $(timedatectl show -p NTPSynchronized --value 2>/dev/null) == "yes" ]]; then
+        ok "Systemzeit per NTP synchron"
+    else
+        warn "Systemzeit nicht synchron - apt/Zertifikate scheitern sonst: timedatectl set-ntp true"
+        fehler=1
+    fi
+
+    mem=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+    if (( mem >= 3800 )); then ok "RAM ${mem} MB"; else warn "RAM ${mem} MB - mindestens 4 GB empfohlen"; fi
+
+    if cpu_has_avx; then ok "CPU unterstuetzt AVX (MongoDB >= 5 moeglich)"; else warn "CPU ohne AVX - MongoDB 8.0 startet nicht (Proxmox CPU-Typ 'host')"; fehler=1; fi
+
+    # Pi-hole & Co. liefern fuer geblockte Domains 0.0.0.0 / 127.0.0.1
+    for h in registry-1.docker.io auth.docker.io github.com raw.githubusercontent.com api.github.com; do
+        ip=$(getent ahostsv4 "$h" 2>/dev/null | awk 'NR==1 {print $1}')
+        if [[ -z $ip ]]; then
+            warn "DNS: $h nicht aufloesbar"; dns_fehler=1
+        elif [[ $ip == 0.0.0.0 || $ip == 127.* ]]; then
+            warn "DNS: $h -> $ip (Pi-hole blockiert? Whitelist pruefen)"; dns_fehler=1
+        fi
+    done
+    if [[ $dns_fehler -eq 0 ]]; then ok "DNS fuer Docker Hub / GitHub ok"; else fehler=1; fi
+
+    if [[ -f $ENV_FILE ]] && command -v docker >/dev/null 2>&1; then
+        load_env
+        [[ $(stat -c %a "$ENV_FILE") == 600 ]] || warn "$ENV_FILE sollte Rechte 600 haben"
+        if (check_db_volumes) 2>/dev/null; then ok "DB-Volumes konsistent"; else warn "DB-Volume fehlt -> trmmctl migrate-db"; fehler=1; fi
+        if (check_mongo_cpu) 2>/dev/null; then :; else warn "MONGO_VERSION=$MONGO_VER passt nicht zur CPU"; fehler=1; fi
+        local pub
+        pub=$(env_get CERT_PUB_KEY)
+        if [[ -n $pub ]]; then
+            end=$(echo "$pub" | base64 -d 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)
+            if [[ -z $end ]]; then
+                warn "CERT_PUB_KEY nicht lesbar"
+            elif ! echo "$pub" | base64 -d | openssl x509 -noout -checkend $((30 * 86400)) >/dev/null 2>&1; then
+                warn "Zertifikat laeuft bald ab: $end -> wartung/01 + trmmctl cert"
+            else
+                ok "Zertifikat gueltig bis $end"
+            fi
+        else
+            warn "Kein Zertifikat in .env - selbstsigniert (trmmctl cert)"
+        fi
+    fi
+    return $fehler
+}
+
+cmd_self_update() {
+    local url="https://raw.githubusercontent.com/$TRMM_REPO/$TRMM_REF/install.sh"
+    info "Lade $url"
+    curl -fsSL "$url" | bash -s -- --yes "$@"
+}
+
+usage() {
+    cat <<EOF
+trmmctl - Tactical RMM (Docker) unter $TRMM_DIR verwalten
+
+Verwendung: trmmctl [--yes] <befehl> [optionen]
+
+Stack:
+  status                    Versionen, Container, Zertifikat, letztes Backup
+  up | down | restart       Stack starten / stoppen / neu starten
+  logs [dienst...]          Live-Logs (z.B. trmmctl logs init backend)
+  ps | pull                 docker compose ps / pull
+  compose <args>            beliebiger docker compose Befehl im Projekt
+
+Wartung:
+  update [version]          Backup, TRMM auf neuestes (oder angegebenes) Release
+         [--no-backup]      pinnen, Images ziehen, neu starten, aufraeumen
+  cert [domain]             Let's-Encrypt-Zertifikat in .env uebernehmen + Neustart
+       [--export dir]       zusaetzlich npm-*.pem fuer Nginx Proxy Manager ablegen
+       [--no-restart]
+  backup                    DB + MeshCentral + Zertifikate nach $BACKUP_DIR
+  restore <datei>           Backup wiederherstellen
+  migrate-db                Daten aus alten DB-Volumes (postgres:13, mongo:4.4, ...)
+                            in die konfigurierten Versionen uebernehmen
+  doctor                    Systemcheck (NTP, AVX, DNS/Pi-hole, Volumes, Zertifikat)
+  self-update               Scripts + Compose-File aus GitHub neu installieren
+
+Benutzer:
+  createsuperuser           Neuen TRMM-Admin anlegen (Django)
+  shell                     Django-Shell im Backend
+
+Konfiguration: $CONFIG_FILE   Projekt: $ENV_FILE
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+main() {
+    while [[ ${1:-} == -* ]]; do
+        case $1 in
+            -y|--yes)  YES=1; shift ;;
+            -h|--help) usage; exit 0 ;;
+            *)         die "Unbekannte Option: $1" ;;
+        esac
+    done
+
+    local cmd=${1:-help}
+    shift || true
+    # .env enthaelt Passwoerter (600) und docker braucht root -> alles ausser help
+    [[ $cmd == help ]] || need_root "$cmd"
+    case $cmd in
+        status)          cmd_status ;;
+        up|start)        cmd_up ;;
+        down|stop)       need_docker; compose down "$@" ;;
+        restart)         need_docker; load_env; check_db_volumes; compose down; compose up -d ;;
+        logs)            cmd_logs "$@" ;;
+        ps)              need_docker; compose ps "$@" ;;
+        pull)            need_docker; compose pull "$@" ;;
+        compose)         need_docker; compose "$@" ;;
+        update)          cmd_update "$@" ;;
+        cert)            cmd_cert "$@" ;;
+        backup)          cmd_backup ;;
+        restore)         cmd_restore "$@" ;;
+        migrate-db)      cmd_migrate_db ;;
+        doctor)          cmd_doctor ;;
+        self-update)     cmd_self_update "$@" ;;
+        createsuperuser) docker exec -it trmm-backend python manage.py createsuperuser ;;
+        shell)           docker exec -it trmm-backend python manage.py shell ;;
+        help)            usage ;;
+        *)               usage; exit 1 ;;
+    esac
+}
+
+main "$@"

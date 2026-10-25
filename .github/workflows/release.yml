@@ -1,0 +1,50 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release Notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          ## Homelab RMM ${{ steps.version.outputs.VERSION }}
+
+          ### 📦 Installation
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.version.outputs.VERSION }}/install.sh \
+            | sudo bash -s -- --ref ${{ steps.version.outputs.VERSION }}
+          ```
+
+          ### 📝 Changelog
+          Siehe [CHANGELOG.md](CHANGELOG.md) für Details.
+          EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          files: |
+            install.sh
+            usr/local/sbin/trmmctl
+            usr/local/bin/update-check
+            usr/local/sbin/server-update
+            usr/local/sbin/apt-smart-update
+            opt/trmm/docker-compose.yml
+            docs/Homelab-Infrastructure-Dokumentation.pdf

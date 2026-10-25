@@ -1,0 +1,20 @@
+# ==============================================================================
+# /etc/default/trmm - Einstellungen fuer trmmctl
+# ==============================================================================
+# Wird von install.sh einmalig angelegt und danach nicht mehr ueberschrieben.
+# ==============================================================================
+
+# Projektverzeichnis (docker-compose.yml + .env)
+TRMM_DIR=/opt/trmm
+
+# Ziel fuer "trmmctl backup" und wie viele Backups behalten werden
+BACKUP_DIR=/var/backups/trmm
+BACKUP_KEEP=7
+
+# Let's-Encrypt-Domain fuer "trmmctl cert" (/etc/letsencrypt/live/<CERT_DOMAIN>/)
+# Leer = wird aus API_HOST abgeleitet (api.example.com -> example.com)
+CERT_DOMAIN=
+
+# Quelle fuer "trmmctl self-update"
+TRMM_REPO=Phydran6/Homelab-RMM-Tactical-RMM
+TRMM_REF=main

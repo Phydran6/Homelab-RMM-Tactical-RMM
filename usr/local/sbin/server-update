@@ -1,19 +1,30 @@
 #!/bin/bash
 # ==============================================================================
-# server-update.sh
+# server-update
 # Installiert unkritische Updates automatisch, kritische manuell
 # ==============================================================================
 # Autor:    Phydran6
-# Version:  2026-01-05
+# Version:  2026-10-25
 # System:   Debian/Ubuntu
+# Pfad:     /usr/local/sbin/server-update
 # ==============================================================================
 # Logik:
 #   - NIEDRIG Pakete werden automatisch installiert
 #   - KRITISCH/MITTEL Pakete werden angezeigt mit Installationsbefehl
+#   - Docker-Engine zaehlt als kritisch (Update startet alle Container neu)
 # ==============================================================================
 
 # kritische pakete pattern (werden NICHT automatisch installiert)
-KRITISCH_PATTERN="^(linux-image|linux-headers|openssl|libssl|libcrypto|grub|initramfs|efi|sudo|openssh|libpam-|systemd|libudev|libsystemd|libc6|libgcc|bash|coreutils|util-linux)"
+KRITISCH_PATTERN="^(linux-image|linux-headers|openssl|libssl|libcrypto|grub|initramfs|efi|sudo|openssh|libpam-|systemd|libudev|libsystemd|libc6|libgcc|bash|coreutils|util-linux|docker|containerd|runc)"
+
+# unbeaufsichtigt: keine dialoge, geaenderte config-dateien behalten
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS=(-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+if [ "$EUID" -ne 0 ]; then
+    echo "FEHLER: root-rechte benoetigt (sudo server-update)"
+    exit 1
+fi
 
 # paketlisten aktualisieren
 echo "=> paketlisten aktualisieren..."
@@ -41,7 +52,11 @@ if [ ${#AUTO[@]} -gt 0 ]; then
     for pkg in "${AUTO[@]}"; do
         echo "   $pkg"
     done
-    apt-get install -y "${AUTO[@]}" 2>&1 | grep -E "^(Inst|Conf|Setting up)" || true
+    # apt install markiert pakete als "manuell" - auto-markierung danach wiederherstellen,
+    # sonst raeumt autoremove alte abhaengigkeiten nie mehr auf
+    AUTO_MARKIERT=$(apt-mark showauto 2>/dev/null)
+    apt-get install --only-upgrade "${APT_OPTS[@]}" "${AUTO[@]}" 2>&1 | grep -E "^(Inst|Conf|Setting up)" || true
+    printf '%s\n' "${AUTO[@]}" | grep -Fxf <(echo "$AUTO_MARKIERT") | xargs -r apt-mark auto >/dev/null
 fi
 
 # kritische anzeigen
@@ -52,15 +67,15 @@ if [ ${#MANUELL[@]} -gt 0 ]; then
     echo "========================================"
     echo ""
     echo "Folgende ${#MANUELL[@]} Paket(e) wurden NICHT installiert"
-    echo "(Kernel/Boot/Systemd/Core - Reboot oder Risiko):"
+    echo "(Kernel/Boot/Systemd/Core/Docker - Reboot oder Risiko):"
     echo ""
     for pkg in "${MANUELL[@]}"; do
         echo "  $pkg"
-        echo "    -> sudo apt install $pkg"
+        echo "    -> sudo apt install --only-upgrade $pkg"
         echo ""
     done
     echo "Alle kritischen auf einmal:"
-    echo "  -> sudo apt install ${MANUELL[*]}"
+    echo "  -> sudo apt install --only-upgrade ${MANUELL[*]}"
 fi
 
 # cache aufraeumen
@@ -75,3 +90,5 @@ echo "ZUSAMMENFASSUNG"
 echo "========================================"
 echo "Installiert:     ${#AUTO[@]} paket(e)"
 echo "Uebersprungen:   ${#MANUELL[@]} paket(e) (kritisch)"
+[ -f /var/run/reboot-required ] && echo "*** NEUSTART ERFORDERLICH ***"
+exit 0

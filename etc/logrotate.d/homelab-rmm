@@ -1,0 +1,8 @@
+/var/log/apt-smart-update.log /var/log/update-check.log {
+    monthly
+    rotate 6
+    compress
+    delaycompress
+    missingok
+    notifempty
+}

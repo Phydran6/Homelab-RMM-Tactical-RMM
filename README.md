@@ -1,313 +1,210 @@
-# Homelab Infrastructure
+# Homelab RMM – Tactical RMM
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Debian](https://img.shields.io/badge/Debian-12-A81D33?logo=debian&logoColor=white)](https://www.debian.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![ShellCheck](https://github.com/yourusername/homelab-infrastructure/workflows/ShellCheck/badge.svg)](https://github.com/yourusername/homelab-infrastructure/actions)
-[![GitHub release](https://img.shields.io/github/v/release/yourusername/homelab-infrastructure)](https://github.com/yourusername/homelab-infrastructure/releases)
-[![GitHub stars](https://img.shields.io/github/stars/yourusername/homelab-infrastructure)](https://github.com/yourusername/homelab-infrastructure/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/yourusername/homelab-infrastructure)](https://github.com/yourusername/homelab-infrastructure/issues)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+[![Debian](https://img.shields.io/badge/Debian-12%20%7C%2013-A81D33?logo=debian&logoColor=white)](https://www.debian.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose%20v2-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![ShellCheck](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/actions/workflows/shellcheck.yml)
+[![Test](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/actions/workflows/test.yml/badge.svg)](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/actions/workflows/test.yml)
+[![GitHub release](https://img.shields.io/github/v/release/Phydran6/Homelab-RMM-Tactical-RMM)](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/releases)
 
-**Automatisierte System-Verwaltung und Monitoring für Homelab-Umgebungen**
+**Tactical RMM per Docker mit einem Befehl installieren – plus Update-Management-Scripts für Homelab-Server.**
 
 Entwickelt von [Phydran6](https://github.com/Phydran6)
 
 ---
 
-## 📋 Übersicht
-
-Dieses Repository enthält eine vollständige Dokumentation und Automatisierungs-Scripts für den Aufbau einer professionellen Homelab-Infrastruktur mit Fokus auf:
-
-- 🎯 **Zentrales System-Monitoring** via Tactical RMM
-- 🔄 **Intelligentes Update-Management** mit automatischer Risiko-Kategorisierung
-- 🐳 **Container-basierte Service-Deployment** mit Docker
-- 🔐 **SSL-Automatisierung** via Let's Encrypt Wildcard-Zertifikate
-
-## ✨ Features
-
-### Update-Management Scripts
-- ✅ **Automatische Installation** unkritischer Updates
-- ⚠️ **Manuelle Kontrolle** für kritische Pakete (Kernel, SSL, Auth)
-- 📊 **Kategorisierung** nach Risiko-Level (KRITISCH/MITTEL/NIEDRIG)
-- 🔒 **Sicherheits-First** Ansatz bei System-Updates
-- 📝 **Detaillierte Logging** aller Update-Vorgänge
-
-### Tactical RMM Deployment
-- 🐳 **Docker-basiert** - Einfache Installation und Wartung
-- 🔐 **SSL/TLS** - Wildcard-Zertifikate via Certbot
-- 🌐 **Multi-Domain Setup** - rmm/api/mesh Subdomains
-- 📱 **Remote Management** - MeshCentral Integration
-- 🔄 **Auto-Deploy** - Infrastructure as Code
-
-### Infrastruktur
-- 🖥️ **Proxmox** Virtualisierung
-- 🐧 **Debian 12** (Bookworm)
-- 🔍 **Pi-hole** DNS-Filtering
-- 🔄 **Nginx Proxy Manager** Reverse Proxy
-
-## 🚀 Quick Start
-
-### One-Line Installation
+## 🚀 Installation
 
 ```bash
-git clone https://github.com/Phydran6/Homelab-RMM-Tactical-RMM.git && \
-cd Homelab-RMM-Tactical-RMM.git && \
-sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh | sudo bash
 ```
 
-### Manuelle Installation
+Der Installer fragt nach der Domain (ergibt `rmm.`, `api.`, `mesh.<domain>`) und erledigt den Rest:
 
-1. **Repository klonen**
+- prüft System, RAM, Systemzeit (aktiviert NTP) und DNS (Pi-hole-Blockaden)
+- bricht ab, wenn die CPU kein AVX hat (MongoDB 8.0) – vor jeder Änderung am System
+- installiert Docker Engine + Compose v2 aus dem offiziellen Docker-Repository
+- legt das Projekt unter **`/opt/trmm`** an, mit `.env` (Rechte 600) und zufälligen Passwörtern
+- pinnt das aktuelle Tactical-RMM-Release und nutzt aktuelle Datenbank-Images
+- übernimmt ein vorhandenes Let's-Encrypt-Zertifikat
+- übernimmt eine bestehende Installation (`~/trmm`, `~/tactical-rmm`) inkl. Datenbank-Migration
+- richtet tägliches Backup und optional einen täglichen Update-Check ein (systemd-Timer)
+
+### Ohne Rückfragen
+
 ```bash
-git clone https://github.com/Phydran6/Homelab-RMM-Tactical-RMM.git
-cd homelab-infrastructure
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh \
+  | sudo bash -s -- --domain example.com --admin admin --yes
 ```
 
-2. **Update-Scripts installieren**
+### Nur die Update-Scripts (z.B. für andere Server)
+
 ```bash
-sudo cp scripts/update-check.sh /usr/local/bin/
-sudo cp scripts/server-update.sh /usr/local/bin/
-sudo chmod +x /usr/local/bin/update-check.sh
-sudo chmod +x /usr/local/bin/server-update.sh
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh \
+  | sudo bash -s -- --tools-only
 ```
 
-3. **Updates prüfen**
+### Erst ansehen, dann ausführen
+
 ```bash
-update-check.sh
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh -o install.sh
+less install.sh
+sudo bash install.sh --help
 ```
 
-4. **Automatisch updaten**
-```bash
-sudo server-update.sh
-```
+| Option | Bedeutung |
+|--------|-----------|
+| `--domain DOMAIN` | Basis-Domain |
+| `--admin NAME` | TRMM-Admin (Default `admin`) |
+| `-y`, `--yes` | keine Rückfragen |
+| `--tools-only` | nur Scripts, kein Docker/TRMM |
+| `--no-start` | einrichten, nicht starten |
+| `--skip-docker` | Docker-Installation überspringen |
+| `--[no-]backup-timer` | tägliches Backup (Default an) |
+| `--[no-]update-timer` | täglicher update-check (Default aus) |
+| `--ref REF` | Branch/Tag für den Download |
+| `--uninstall` | Scripts/Timer entfernen, Daten bleiben |
 
-## 📖 Dokumentation
-
-Die vollständige Dokumentation findest du in [`docs/Homelab-Infrastructure-Dokumentation.md`](docs/Homelab-Infrastructure-Dokumentation.md)
-
-### 📚 Inhaltsverzeichnis:
-1. [Übersicht](docs/Homelab-Infrastructure-Dokumentation.md#1-übersicht)
-2. [Docker Installation auf Debian 12](docs/Homelab-Infrastructure-Dokumentation.md#2-docker-installation-auf-debian-12)
-3. [Tactical RMM Docker Deployment](docs/Homelab-Infrastructure-Dokumentation.md#3-tactical-rmm-docker-deployment)
-4. [SSL-Zertifikate mit Certbot](docs/Homelab-Infrastructure-Dokumentation.md#4-ssl-zertifikate-mit-certbot)
-5. [Update-Management Scripts](docs/Homelab-Infrastructure-Dokumentation.md#5-update-management-scripts)
-6. [Pi-hole Konfiguration](docs/Homelab-Infrastructure-Dokumentation.md#6-pi-hole-konfiguration)
-7. [Troubleshooting](docs/Homelab-Infrastructure-Dokumentation.md#7-troubleshooting)
-8. [Quick Reference](docs/Homelab-Infrastructure-Dokumentation.md#8-quick-reference)
-
-## 🛠️ Wartung & Updates
-
-Schritt-für-Schritt-Anleitungen für wiederkehrende Wartungsaufgaben:
-
-| Anleitung | Beschreibung |
-|-----------|--------------|
-| [01 – SSL-Zertifikat erneuern](wartung/01-ssl-zertifikat-erneuern.md) | Wildcard-Zertifikat mit Certbot erneuern und in TRMM & NPM eintragen |
-| [02 – TRMM Update](wartung/02-trmm-update.md) | Tactical RMM Docker-Installation aktualisieren |
+Erneut ausführen = Update der Scripts und des Compose-Files (`/opt/trmm/.env` bleibt unverändert). Kurzform: `sudo trmmctl self-update`.
 
 ---
 
-## 🔧 Update-Scripts
+## 📁 Wo liegt was auf dem Server?
 
-### `update-check.sh` - Update-Prüfung
+Die Struktur des Repos entspricht 1:1 den Zielpfaden:
 
-Prüft verfügbare Updates und kategorisiert sie nach Priorität.
-
-**Verwendung:**
-```bash
-update-check.sh
+```
+/opt/trmm/
+├── docker-compose.yml         # verwaltet vom Installer
+├── .env                       # Konfiguration + Passwörter (600, wird nie überschrieben)
+└── .env.example
+/usr/local/sbin/
+├── trmmctl                    # Verwaltung der TRMM-Installation
+├── server-update              # unkritische Updates automatisch
+├── apt-smart-update           # Update mit Timeout-Menü (auch als TRMM-Script)
+└── pve-disk-resize            # Root-Partition nach Disk-Vergrößerung erweitern
+/usr/local/bin/
+└── update-check               # Updates prüfen und kategorisieren
+/etc/default/trmm              # Einstellungen für trmmctl
+/etc/systemd/system/
+├── trmm-backup.{service,timer}
+└── update-check.{service,timer}
+/etc/logrotate.d/homelab-rmm
+/var/backups/trmm/             # Backups + Migrations-Dumps
 ```
 
-**Beispiel-Ausgabe:**
+---
+
+## 🛠️ trmmctl
+
+```bash
+sudo trmmctl status            # Versionen, Container, Zertifikat, letztes Backup
+sudo trmmctl logs init         # Init beobachten (erster Start 5-10 Minuten)
+sudo trmmctl update            # Backup + neuestes TRMM-Release + Image-Cleanup
+sudo trmmctl cert              # Let's-Encrypt-Zertifikat in .env übernehmen + Neustart
+sudo trmmctl cert --export /root/npm-certs   # + npm-*.pem für Nginx Proxy Manager
+sudo trmmctl backup            # DB + MeshCentral + Zertifikate
+sudo trmmctl restore <datei>
+sudo trmmctl migrate-db        # alte DB-Volumes in neue Major-Versionen übernehmen
+sudo trmmctl doctor            # NTP, AVX, DNS/Pi-hole, Volumes, Zertifikat
+sudo trmmctl createsuperuser
+sudo trmmctl help
+```
+
+---
+
+## 🐳 Images
+
+| Dienst | Upstream-Compose | Hier | `.env` |
+|--------|------------------|------|--------|
+| Tactical RMM | `latest` | aktuelles Release gepinnt | `VERSION` |
+| PostgreSQL | `postgres:13-alpine` (EOL) | `postgres:18-alpine` | `POSTGRES_VERSION` |
+| Redis | `redis:6.0-alpine` (EOL) | `redis:8-alpine` | `REDIS_VERSION` |
+| MongoDB | `mongo:4.4` (EOL) | `mongo:8.0` | `MONGO_VERSION` |
+
+Außerdem: Healthchecks mit `depends_on`-Conditions, Log-Rotation pro Container, begrenzter MongoDB-Cache, kein `user: 1000` mehr für Redis/MongoDB (die offiziellen Images droppen Privilegien selbst).
+
+Die Datenbank-Volumes tragen die Major-Version im Namen (`trmm_postgres18_data`). Ein Versionswechsel startet so nie auf einem leeren Volume – `trmmctl` verweigert den Start und verweist auf `trmmctl migrate-db` (Dump/Restore, das alte Volume bleibt als Rollback).
+
+> ⚠️ **MongoDB ≥ 5.0 braucht AVX.** Unter Proxmox den CPU-Typ der VM auf `host` oder `x86-64-v3` stellen. Ohne AVX bricht der Installer ab, bevor er etwas verändert.
+
+---
+
+## 🔄 Update-Scripts
+
+| Script | Beschreibung |
+|--------|--------------|
+| `update-check` | Prüft Updates und kategorisiert nach KRITISCH / MITTEL / NIEDRIG |
+| `sudo server-update` | Installiert NIEDRIG automatisch, zeigt kritische mit Befehl an |
+| `sudo apt-smart-update` | Wie server-update, mit 3-Sekunden-Timeout-Menü – läuft ohne Eingabe vollautomatisch (TRMM) |
+| `sudo pve-disk-resize` | Erweitert die Root-Partition nach Vergrößerung der virtuellen Disk |
+
+Beispiel `update-check`:
 ```
 24 UPDATE(S)
 ----------------
 KRITISCH: linux-image-amd64 openssl libssl3
-MITTEL: systemd base-files
+MITTEL: systemd base-files docker-ce
 NIEDRIG: vim curl nginx
 ```
 
-### `server-update.sh` - Automatische Installation
-
-Installiert automatisch unkritische Updates, zeigt kritische Pakete zur manuellen Installation.
-
-**Verwendung:**
-```bash
-sudo server-update.sh
-```
-
-**Beispiel-Ausgabe:**
-```
-=> installiere 12 unkritische(s) paket(e)...
-
-========================================
-KRITISCHE UPDATES - MANUELLE INSTALLATION
-========================================
-  linux-image-6.1.0-18-amd64
-    -> sudo apt install linux-image-6.1.0-18-amd64
-  
-Alle kritischen auf einmal:
-  -> sudo apt install linux-image-6.1.0-18-amd64 systemd
-
-========================================
-ZUSAMMENFASSUNG
-========================================
-Installiert:     12 paket(e)
-Uebersprungen:   2 paket(e) (kritisch)
-```
-
-## 📊 Update-Kategorisierung
-
 | Priorität | Pakete | Aktion |
 |-----------|--------|--------|
-| **🔴 KRITISCH** | Kernel, SSL, Auth, Security-Updates | Manuelle Installation erforderlich |
-| **🟡 MITTEL** | Systemd, Netzwerk, Paketmanager | Zeitnahe Installation empfohlen |
-| **🟢 NIEDRIG** | Normale Anwendungen, Libraries | Automatische Installation |
+| **🔴 KRITISCH** | Kernel, SSL, Auth, Security-Updates | Manuelle Installation |
+| **🟡 MITTEL** | systemd, Netzwerk, Paketmanager, Docker-Engine | Zeitnah manuell |
+| **🟢 NIEDRIG** | Normale Anwendungen, Libraries | Automatisch |
 
-### Kritische Pakete (Pattern):
-- `linux-image-*`, `linux-headers-*`
-- `openssl`, `libssl*`, `libcrypto*`
-- `grub*`, `initramfs*`, `efi*`
-- `sudo`, `openssh*`, `libpam-*`
-- `systemd*`, `libc6`, `bash`
+Die Scripts installieren mit `--only-upgrade` ohne Dialoge (`DEBIAN_FRONTEND=noninteractive`, geänderte Config-Dateien bleiben) und erhalten die Auto-Markierung von Abhängigkeiten, damit `apt autoremove` weiter aufräumt. Details: [usr/local/README.md](usr/local/README.md)
 
-## 🐳 Tactical RMM Setup (Kurzform)
+---
 
-```bash
-# 1. Docker installieren
-sudo apt install docker.io
-sudo mkdir -p /usr/local/lib/docker/cli-plugins
-sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-  -o /usr/local/lib/docker/cli-plugins/docker-compose
-sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+## 📖 Dokumentation
 
-# 2. Wildcard-Zertifikat erstellen
-sudo apt install certbot
-sudo certbot certonly --manual -d *.yourdomain.com --agree-tos --no-bootstrap --preferred-challenges dns
+| Dokument | Inhalt |
+|----------|--------|
+| [docs/Homelab-Infrastructure-Dokumentation.md](docs/Homelab-Infrastructure-Dokumentation.md) | Gesamtdokumentation: Installation, TRMM, SSL, Scripts, Pi-hole, Troubleshooting |
+| [wartung/01 – SSL-Zertifikat erneuern](wartung/01-ssl-zertifikat-erneuern.md) | Wildcard-Zertifikat mit Certbot erneuern und in TRMM & NPM eintragen |
+| [wartung/02 – TRMM Update](wartung/02-trmm-update.md) | Tactical RMM aktualisieren |
 
-# 3. TRMM Setup
-mkdir ~/tactical-rmm && cd ~/tactical-rmm
-wget https://raw.githubusercontent.com/amidaware/tacticalrmm/master/docker/docker-compose.yml
-wget https://raw.githubusercontent.com/amidaware/tacticalrmm/master/docker/.env.example
-mv .env.example .env
-
-# 4. Zertifikate in .env eintragen
-echo "CERT_PUB_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/yourdomain.com/fullchain.pem)" >> .env
-echo "CERT_PRIV_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/yourdomain.com/privkey.pem)" >> .env
-
-# 5. .env anpassen, dann starten
-nano .env  # APP_HOST, API_HOST, MESH_HOST anpassen
-docker compose up -d
-```
-
-📖 **Vollständige Anleitung:** [docs/Homelab-Infrastructure-Dokumentation.md](docs/Homelab-Infrastructure-Dokumentation.md#3-tactical-rmm-docker-deployment)
-
-## 🔒 Sicherheit
-
-- **Keine automatischen Kernel-Updates** - Verhindert unerwartete Reboots
-- **SSL/Auth-Updates manuell** - Maximale Kontrolle über kritische Komponenten
-- **Security-Updates priorisiert** - Werden als KRITISCH kategorisiert
-- **Audit-Trail** - Alle Updates werden geloggt
-- **ShellCheck** - Alle Scripts werden validiert
-
-📋 **Security Policy:** [SECURITY.md](SECURITY.md)
+---
 
 ## 🛠️ Systemanforderungen
 
-- **OS:** Debian 12 (Bookworm) oder Ubuntu 22.04+
-- **RAM:** Minimum 4GB (8GB empfohlen für TRMM)
-- **Disk:** 20GB+ freier Speicher
-- **CPU:** 2+ Cores
-- **Netzwerk:** Statische IP empfohlen
-
-## 📁 Projektstruktur
-
-```
-homelab-infrastructure/
-├── 📄 README.md                      # Diese Datei
-├── 📄 LICENSE                        # MIT License
-├── 📄 CHANGELOG.md                   # Versionshistorie
-├── 📄 CONTRIBUTING.md                # Contribution Guidelines
-├── 📄 CODE_OF_CONDUCT.md            # Code of Conduct
-├── 📄 SECURITY.md                    # Security Policy
-├── 🔧 install.sh                     # Quick Install Script
-├── 📂 wartung/                       # Wartungs- & Update-Anleitungen
-│   ├── 📖 01-ssl-zertifikat-erneuern.md
-│   └── 📖 02-trmm-update.md
-├── 📂 scripts/
-│   ├── 📜 update-check.sh           # Update-Prüfung
-│   └── 📜 server-update.sh          # Automatische Installation
-├── 📂 docs/
-│   ├── 📖 Homelab-Infrastructure-Dokumentation.md
-│   └── 📄 Homelab-Infrastructure-Dokumentation.pdf
-└── 📂 .github/
-    ├── 📂 workflows/
-    │   ├── shellcheck.yml           # Script-Validierung
-    │   ├── test.yml                 # Automated Testing
-    │   └── release.yml              # Release Automation
-    └── 📂 ISSUE_TEMPLATE/
-        ├── bug_report.md
-        └── feature_request.md
-```
-
-## 🤝 Beitragen
-
-Contributions sind willkommen! 🎉
-
-1. Fork das Repository
-2. Erstelle einen Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit deine Änderungen (`git commit -m 'Add some AmazingFeature'`)
-4. Push zum Branch (`git push origin feature/AmazingFeature`)
-5. Öffne einen Pull Request
-
-📖 **Contribution Guide:** [CONTRIBUTING.md](CONTRIBUTING.md)
-
-## 📝 License
-
-Dieses Projekt ist unter der MIT License lizenziert - siehe [LICENSE](LICENSE) Datei für Details.
-
-## 👤 Autor
-
-**Phydran6**
-- 💼 GitHub: [@Phydran6](https://github.com/Phydran6)
-
-## 📚 Weitere Ressourcen
-
-- 📖 [Tactical RMM Dokumentation](https://docs.tacticalrmm.com/)
-- 🐳 [Docker Compose Dokumentation](https://docs.docker.com/compose/)
-- 🔐 [Certbot Dokumentation](https://certbot.eff.org/docs/)
-- 🖥️ [Proxmox Dokumentation](https://pve.proxmox.com/wiki/Main_Page)
+- **OS:** Debian 12/13 oder Ubuntu 22.04+ (amd64 für TRMM)
+- **RAM:** Minimum 4 GB
+- **Disk:** 20 GB+ frei
+- **CPU:** 2+ Cores, mit AVX (Proxmox CPU-Typ `host`)
+- **Netzwerk:** Statische IP, DNS A-Records `rmm`/`api`/`mesh`
 
 ## ⚠️ Wichtige Hinweise
 
-- ⏰ **Systemzeit muss korrekt sein** vor Paket-Installation
-- 🐳 **Docker Compose v2 Plugin** manuell installieren (nicht Debian-Paket)
-- ⏳ **TRMM Initialisierung** dauert 5-10 Minuten
-- 👤 **User-Erstellung** via Shell, nicht Web-UI
-- 🔍 **Pi-hole Whitelist** für Docker/GitHub/APT-Mirrors notwendig
+- ⏰ **Systemzeit muss korrekt sein** – der Installer aktiviert NTP
+- ⏳ **TRMM-Initialisierung** dauert 5-10 Minuten (`trmmctl logs init`)
+- 🔍 **Pi-hole-Whitelist** für Docker/GitHub/APT-Mirrors notwendig – `trmmctl doctor` prüft das
+- 🔐 **Agent-Auto-Update** vor einem TRMM-Update in der Web-UI deaktivieren
 
-## 📊 Status & Roadmap
+## 🗺️ Roadmap
 
-### ✅ Aktueller Status
-- Aktiv in Produktion seit Februar 2026
-- Tested auf Debian 12 & Ubuntu 22.04
-- ShellCheck validated
-
-### 🗺️ Roadmap
-- [ ] Automatische Zertifikat-Erneuerung
-- [ ] Backup-Scripts für TRMM
+- [x] Online-Installer
+- [x] Backup-Scripts für TRMM
+- [ ] Automatische Zertifikat-Erneuerung (DNS-API)
 - [ ] Support für Rocky Linux / AlmaLinux
-- [ ] Grafana Dashboard Integration
 - [ ] Email-Benachrichtigungen bei kritischen Updates
 
 ---
 
-<div align="center">
+## 🤝 Beitragen
 
-**⭐ Wenn dir dieses Projekt geholfen hat, gib ihm einen Star!**
+Contributions sind willkommen – siehe [CONTRIBUTING.md](CONTRIBUTING.md). Sicherheitslücken bitte gemäß [SECURITY.md](SECURITY.md) melden.
+
+## 📝 License
+
+MIT – siehe [LICENSE](LICENSE).
+
+<div align="center">
 
 Made with ❤️ by [Phydran6](https://github.com/Phydran6)
 
-[Report Bug](https://github.com/yourusername/homelab-infrastructure/issues) • [Request Feature](https://github.com/yourusername/homelab-infrastructure/issues) • [Documentation](docs/Homelab-Infrastructure-Dokumentation.md)
+[Report Bug](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/issues) • [Request Feature](https://github.com/Phydran6/Homelab-RMM-Tactical-RMM/issues) • [Documentation](docs/Homelab-Infrastructure-Dokumentation.md)
 
 </div>

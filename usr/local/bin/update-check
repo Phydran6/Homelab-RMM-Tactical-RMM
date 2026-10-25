@@ -1,15 +1,16 @@
 #!/bin/bash
 # ==============================================================================
-# update-check.sh
+# update-check
 # Prueft auf Updates und kategorisiert nach Prioritaet
 # ==============================================================================
 # Autor:    Phydran6
-# Version:  2026-01-05
+# Version:  2026-10-25
 # System:   Debian/Ubuntu
+# Pfad:     /usr/local/bin/update-check
 # ==============================================================================
 # Kategorien:
 #   KRITISCH  Security, Kernel, SSL, Auth
-#   MITTEL    Systemd, Netzwerk, Paketmanager
+#   MITTEL    Systemd, Netzwerk, Paketmanager, Docker-Engine
 #   NIEDRIG   Rest
 # ==============================================================================
 # Ausgabe-Beispiele:
@@ -20,10 +21,12 @@
 #   NIEDRIG: vim
 # ==============================================================================
 
-# paketlisten holen
-if ! apt-get update -qq 2>/dev/null; then
-    echo "FEHLER: apt update fehlgeschlagen"
-    exit 0
+# paketlisten holen (nur als root moeglich, sonst vorhandenen cache nutzen)
+if [ "$EUID" -eq 0 ]; then
+    if ! apt-get update -qq 2>/dev/null; then
+        echo "FEHLER: apt update fehlgeschlagen"
+        exit 0
+    fi
 fi
 
 # updates abfragen
@@ -41,14 +44,14 @@ declare -a KRIT=() MITT=() NIED=()
 while IFS= read -r line; do
     [ -z "$line" ] && continue
     pkg=$(echo "$line" | cut -d'/' -f1)
-    
+
     # kritisch: security, kernel, ssl, auth
     if echo "$line" | grep -qE "(security|/stable-security)"; then
         KRIT+=("$pkg")
     elif echo "$pkg" | grep -qiE "^(linux-image|linux-headers|openssl|libssl|grub|sudo|openssh|libpam-)"; then
         KRIT+=("$pkg")
-    # mittel: systemd, netzwerk, paketmanager
-    elif echo "$pkg" | grep -qiE "^(systemd|libnss|libudev|libsystemd|base-files|apt|dpkg|network|udev|dbus)"; then
+    # mittel: systemd, netzwerk, paketmanager, docker (neustart aller container)
+    elif echo "$pkg" | grep -qiE "^(systemd|libnss|libudev|libsystemd|base-files|apt|dpkg|network|udev|dbus|docker|containerd|runc)"; then
         MITT+=("$pkg")
     # niedrig: rest
     else
@@ -63,3 +66,4 @@ echo "----------------"
 [ ${#KRIT[@]} -gt 0 ] && echo "KRITISCH: ${KRIT[*]}"
 [ ${#MITT[@]} -gt 0 ] && echo "MITTEL: ${MITT[*]}"
 [ ${#NIED[@]} -gt 0 ] && echo "NIEDRIG: ${NIED[*]}"
+exit 0

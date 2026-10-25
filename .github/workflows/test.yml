@@ -1,0 +1,63 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  scripts:
+    name: Scripts on ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ "debian:12", "debian:13", "ubuntu:22.04", "ubuntu:24.04" ]
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Syntax check
+        run: |
+          for f in install.sh usr/local/bin/* usr/local/sbin/*; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: Installer help
+        run: bash install.sh --help
+
+      - name: update-check
+        run: usr/local/bin/update-check
+
+      - name: trmmctl help
+        run: bash usr/local/sbin/trmmctl help
+
+      - name: Tools-only install
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq systemd >/dev/null
+          bash install.sh --tools-only --yes
+          test -x /usr/local/bin/update-check
+          test -x /usr/local/sbin/server-update
+          test -x /usr/local/sbin/apt-smart-update
+          test -L /usr/local/bin/update-check.sh
+
+  compose:
+    name: Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Validate docker-compose.yml
+        working-directory: opt/trmm
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose config --volumes
+          docker compose config | grep -E 'image: (postgres|redis|mongo):'

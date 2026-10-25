@@ -34,8 +34,8 @@ Feature-Ideen sind willkommen:
 1. **Fork** das Repository
 2. **Clone** deinen Fork:
    ```bash
-   git clone https://github.com/dein-username/homelab-infrastructure.git
-   cd homelab-infrastructure
+   git clone https://github.com/dein-username/Homelab-RMM-Tactical-RMM.git
+   cd Homelab-RMM-Tactical-RMM
    ```
 3. **Erstelle einen Branch**:
    ```bash
@@ -51,7 +51,8 @@ Feature-Ideen sind willkommen:
 - Füge Header-Kommentare hinzu (Autor, Version, Beschreibung)
 - Verwende aussagekräftige Variablennamen
 - Kommentiere komplexe Logik
-- Teste mit ShellCheck: `shellcheck script.sh`
+- Teste mit ShellCheck: `shellcheck script`
+- Dateien liegen im Repo am Zielpfad (`usr/local/sbin/...` → `/usr/local/sbin/...`) und werden in `FILES` in `install.sh` eingetragen
 
 **Dokumentation:**
 - Markdown für alle `.md` Dateien
@@ -69,10 +70,10 @@ Feature-Ideen sind willkommen:
 
 Vor dem PR:
 
-1. **Teste deine Änderungen** auf Debian 12
+1. **Teste deine Änderungen** auf Debian 12/13 (lokal: `sudo ./install.sh` aus dem Clone)
 2. **Führe ShellCheck aus**:
    ```bash
-   shellcheck scripts/*.sh
+   shellcheck install.sh usr/local/bin/* usr/local/sbin/*
    ```
 3. **Prüfe die Dokumentation** auf Tippfehler und Vollständigkeit
 

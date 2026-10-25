@@ -1,14 +1,14 @@
 # HOMELAB INFRASTRUCTURE DOKUMENTATION
 
 **Phydran6**  
-**Stand: Februar 2026**
+**Stand: Oktober 2026**
 
 ---
 
 ## Inhaltsverzeichnis
 
-1. [Ãœbersicht](#1-Ã¼bersicht)
-2. [Docker Installation auf Debian 12](#2-docker-installation-auf-debian-12)
+1. [Übersicht](#1-übersicht)
+2. [Installation (Online-Installer)](#2-installation-online-installer)
 3. [Tactical RMM Docker Deployment](#3-tactical-rmm-docker-deployment)
 4. [SSL-Zertifikate mit Certbot](#4-ssl-zertifikate-mit-certbot)
 5. [Update-Management Scripts](#5-update-management-scripts)
@@ -18,18 +18,19 @@
 
 ---
 
-## 1. Ãœbersicht
+## 1. Übersicht
 
 Diese Dokumentation beschreibt die Einrichtung und Wartung der Homelab-Infrastruktur mit Fokus auf System-Automatisierung und Monitoring.
 
 ### 1.1 Kernkomponenten
 
 - **Tactical RMM (TRMM)** - System Monitoring und Remote Management
-- **Docker** - Container-Plattform fÃ¼r alle Services
+- **Docker** - Container-Plattform für alle Services
 - **Nginx Proxy Manager** - SSL-Terminierung und Reverse Proxy
 - **Pi-hole** - DNS-Filtering
 - **Certbot** - Let's Encrypt Wildcard-Zertifikate
 - **Custom Update Scripts** - Automatisierte Paketverwaltung
+- **trmmctl** - Verwaltung von Update, Zertifikat, Backup und Migration
 
 ### 1.2 Domain-Struktur
 
@@ -43,46 +44,76 @@ Diese Dokumentation beschreibt die Einrichtung und Wartung der Homelab-Infrastru
 
 ### 1.3 Infrastruktur
 
-- **Virtualisierung:** Proxmox
-- **Betriebssystem:** Debian 12 (Bookworm)
+- **Virtualisierung:** Proxmox (CPU-Typ `host` oder `x86-64-v3`, siehe [7.7](#77-mongodb-startet-nicht-illegal-instruction))
+- **Betriebssystem:** Debian 13 (Trixie) / Debian 12 (Bookworm)
 - **DNS-Server:** Pi-hole (192.168.179.30)
+
+### 1.4 Verzeichnisse auf dem Server
+
+| Pfad | Inhalt |
+|------|--------|
+| `/opt/trmm/` | `docker-compose.yml`, `.env` (Rechte 600), `.env.example` |
+| `/usr/local/sbin/trmmctl` | Verwaltungstool |
+| `/usr/local/sbin/server-update`, `apt-smart-update`, `pve-disk-resize` | Root-Scripts |
+| `/usr/local/bin/update-check` | Update-Prüfung |
+| `/etc/default/trmm` | Einstellungen für trmmctl (Backup-Ziel, Cert-Domain) |
+| `/etc/systemd/system/trmm-backup.timer` | tägliches Backup |
+| `/etc/systemd/system/update-check.timer` | täglicher Update-Check |
+| `/var/backups/trmm/` | Backups und Migrations-Dumps |
+| `/etc/letsencrypt/live/<domain>/` | Zertifikate |
 
 ---
 
-## 2. Docker Installation auf Debian 12
-
-> **âš ï¸ WICHTIG:** Nicht das Debian-Paket `docker-compose` verwenden! Stattdessen manuelles Docker Compose v2 Plugin installieren.
-
-### 2.1 Docker Engine installieren
+## 2. Installation (Online-Installer)
 
 ```bash
-# NUR docker.io installieren (NICHT docker-compose!)
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh | sudo bash
+```
+
+Ohne Rückfragen:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh \
+  | sudo bash -s -- --domain phytech.de --admin admin --yes
+```
+
+Der Installer:
+
+1. prüft System, RAM, Systemzeit (aktiviert NTP) und DNS (Pi-hole-Blockaden) und bricht ohne AVX-fähige CPU ab, bevor etwas verändert wird
+2. installiert Docker Engine + Compose v2 aus dem offiziellen Docker-Repository
+3. legt alle Dateien in die Standardpfade (siehe [1.4](#14-verzeichnisse-auf-dem-server))
+4. übernimmt eine bestehende Installation aus `~/trmm` bzw. `~/tactical-rmm`
+5. erzeugt `/opt/trmm/.env` mit zufälligen Passwörtern und pinnt das aktuelle TRMM-Release
+6. übernimmt ein vorhandenes Let's-Encrypt-Zertifikat
+7. richtet die systemd-Timer ein und startet den Stack
+
+> **Erneut ausführen = Update** der Scripts und des Compose-Files. Die `.env` wird nie überschrieben, nur um fehlende Schlüssel ergänzt. Alternativ: `sudo trmmctl self-update`.
+
+Nur die Update-Scripts (z.B. auf anderen Servern):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Phydran6/Homelab-RMM-Tactical-RMM/main/install.sh | sudo bash -s -- --tools-only
+```
+
+### 2.1 Docker manuell (falls ohne Installer)
+
+> **⚠️ WICHTIG:** Nicht das alte Debian-Paket `docker-compose` (v1) verwenden.
+
+```bash
+# Offizielles Docker-Repository
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+cat <<EOF | sudo tee /etc/apt/sources.list.d/docker.sources
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
 sudo apt update
-sudo apt install docker.io
-```
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
-### 2.2 Docker Compose v2 Plugin manuell hinzufÃ¼gen
-
-```bash
-# Plugin-Verzeichnis erstellen
-sudo mkdir -p /usr/local/lib/docker/cli-plugins
-
-# Docker Compose herunterladen
-sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-  -o /usr/local/lib/docker/cli-plugins/docker-compose
-
-# AusfÃ¼hrbar machen
-sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-# Testen
 docker compose version
-```
-
-### 2.3 User zur Docker-Gruppe hinzufÃ¼gen
-
-```bash
-sudo usermod -aG docker $USER
-# Danach neu anmelden!
 ```
 
 ---
@@ -93,91 +124,71 @@ sudo usermod -aG docker $USER
 
 ### 3.1 Voraussetzungen
 
-- 3 DNS A-Records: `rmm`, `api`, `mesh` â†’ Server-IP
+- 3 DNS A-Records: `rmm`, `api`, `mesh` → Server-IP (bzw. Reverse Proxy)
 - Wildcard SSL-Zertifikat (*.phytech.de)
-- Docker + Docker Compose v2 Plugin
-- Port 443 in Firewall geÃ¶ffnet
+- Port 443 in Firewall geöffnet
 
-### 3.2 Zertifikat mit Certbot erstellen
+### 3.2 Images
 
-```bash
-sudo apt install certbot
+Das Compose-File unter `/opt/trmm` basiert auf dem Upstream-File von amidaware, nutzt aber aktuelle Datenbank-Images:
 
-# Wildcard-Zertifikat anfordern (DNS-01 Challenge)
-sudo certbot certonly --manual -d *.phytech.de \
-  --agree-tos --no-bootstrap --preferred-challenges dns
-```
+| Dienst | Upstream | Hier | Variable in `.env` |
+|--------|----------|------|--------------------|
+| PostgreSQL | `postgres:13-alpine` (EOL) | `postgres:18-alpine` | `POSTGRES_VERSION` |
+| Redis | `redis:6.0-alpine` (EOL) | `redis:8-alpine` | `REDIS_VERSION` |
+| MongoDB | `mongo:4.4` (EOL) | `mongo:8.0` | `MONGO_VERSION` |
+| TRMM | `VERSION=latest` | gepinnt, z.B. `1.5.2` | `VERSION` |
 
-Bei der Aufforderung: TXT-Record `_acme-challenge.phytech.de` im DNS-Manager eintragen.
+Zusätzlich: Healthchecks mit `depends_on`-Conditions, Log-Rotation (3×10 MB je Container), begrenzter MongoDB-Cache (`MONGO_CACHE_GB=0.25`), Redis/MongoDB mit dem Privilege-Drop der offiziellen Images.
 
-```bash
-# Verifizieren dass TXT-Record propagiert ist
-dig -t txt _acme-challenge.phytech.de
-```
+Die DB-Volumes tragen die Major-Version im Namen (`trmm_postgres18_data`, `trmm_mongo8.0_data`). Dadurch startet ein Versionswechsel nie auf einem leeren Volume, während die Daten noch im alten liegen – `trmmctl` verweigert dann den Start und verweist auf `trmmctl migrate-db`.
 
-> **Erst nach erfolgreicher Verifikation Enter drÃ¼cken!**
+### 3.3 Zertifikat mit Certbot erstellen
 
-### 3.3 TRMM Dateien herunterladen
+Siehe [Abschnitt 4](#4-ssl-zertifikate-mit-certbot) bzw. [wartung/01](../wartung/01-ssl-zertifikat-erneuern.md). Danach:
 
 ```bash
-mkdir -p ~/tactical-rmm && cd ~/tactical-rmm
-
-wget https://raw.githubusercontent.com/amidaware/tacticalrmm/master/docker/docker-compose.yml
-wget https://raw.githubusercontent.com/amidaware/tacticalrmm/master/docker/.env.example
-mv .env.example .env
+sudo trmmctl cert phytech.de
 ```
 
-### 3.4 Zertifikate Base64-kodieren und eintragen
+### 3.4 Konfiguration
 
 ```bash
-# Zertifikate in .env eintragen
-echo "CERT_PUB_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/phytech.de/fullchain.pem)" >> .env
-echo "CERT_PRIV_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/phytech.de/privkey.pem)" >> .env
+sudo nano /opt/trmm/.env
 ```
 
-### 3.5 .env anpassen
-
-```bash
-nano .env
-```
-
-Wichtige Werte:
+Wichtige Werte (vom Installer gesetzt):
 ```
 APP_HOST=rmm.phytech.de
 API_HOST=api.phytech.de
 MESH_HOST=mesh.phytech.de
 TRMM_USER=admin
-TRMM_PASS=<sicheres-passwort>
+TRMM_PASS=<zufällig>
+VERSION=1.5.2
 ```
 
-### 3.6 Container starten
+Nach Änderungen: `sudo trmmctl restart`
+
+### 3.5 Container starten
 
 ```bash
-docker compose up -d
+sudo trmmctl up
 
 # Logs beobachten (Init dauert 5-10 Minuten!)
-docker compose logs -f
+sudo trmmctl logs init
 ```
 
-> **âš ï¸ WICHTIG:** Die Initialisierung der Container dauert **5-10 Minuten**. Geduld!
+> **⚠️ WICHTIG:** Die Initialisierung der Container dauert **5-10 Minuten**. Geduld!
 
-### 3.7 User-Erstellung via Shell
+### 3.6 Benutzer
 
-User-Erstellung Ã¼ber Web-UI funktioniert bei Docker manchmal nicht korrekt. Besser Ã¼ber Shell:
+Der Admin aus `TRMM_USER`/`TRMM_PASS` wird beim Init automatisch angelegt. Weitere Admins:
 
 ```bash
-# In Django Shell einloggen
-sudo docker exec -it trmm-backend python manage.py shell
+sudo trmmctl createsuperuser
 ```
 
-```python
-# Python-Befehle:
-from accounts.models import User
-User.objects.create_superuser('admin', 'admin@example.com', 'password')
-exit()
-```
-
-### 3.8 NPM (Nginx Proxy Manager) Konfiguration
+### 3.7 NPM (Nginx Proxy Manager) Konfiguration
 
 Falls NPM als Reverse Proxy verwendet wird, alle 3 Proxy Hosts auf Port 80 der TRMM-Box zeigen lassen:
 
@@ -189,6 +200,31 @@ Falls NPM als Reverse Proxy verwendet wird, alle 3 Proxy Hosts auf Port 80 der T
 
 SSL: Wildcard-Zertifikat `*.phytech.de`, Force SSL ON
 
+### 3.8 Backup & Restore
+
+```bash
+sudo trmmctl backup                                   # manuell
+systemctl list-timers trmm-backup.timer               # täglich 03:15
+sudo trmmctl restore /var/backups/trmm/trmm-<datum>.tar
+```
+
+Ein Backup enthält PostgreSQL-Dump, MeshCentral-Datenbank, MeshCentral-Daten, TRMM-Zertifikate/private Dateien, `.env` und Compose-File. Anzahl: `BACKUP_KEEP` in `/etc/default/trmm`.
+
+### 3.9 Migration einer alten Installation
+
+Der Installer erkennt einen laufenden Stack (bzw. `~/trmm`, `~/tactical-rmm`), kopiert die `.env` nach `/opt/trmm`, behält den Compose-Projektnamen (damit `tactical_data`/`mesh_data` weiter genutzt werden), stoppt den alten Stack und ruft `trmmctl migrate-db` auf:
+
+1. alter PostgreSQL-13-Container auf dem alten Volume → `pg_dump`
+2. neuer PostgreSQL-18-Container auf neuem Volume → Import
+3. dasselbe für MongoDB 4.4 → 8.0 (`mongodump`/`mongorestore`)
+
+Die alten Volumes bleiben unverändert als Rollback erhalten, die Dumps liegen unter `/var/backups/trmm/migrate-*`. Wenn alles läuft:
+
+```bash
+docker volume ls | grep trmm
+docker volume rm trmm_postgres_data trmm_mongo_data
+```
+
 ---
 
 ## 4. SSL-Zertifikate mit Certbot
@@ -197,40 +233,60 @@ SSL: Wildcard-Zertifikat `*.phytech.de`, Force SSL ON
 
 ```
 /etc/letsencrypt/live/phytech.de/
-â”œâ”€â”€ fullchain.pem   # Ã–ffentlicher SchlÃ¼ssel + Zertifikatskette
-â”œâ”€â”€ privkey.pem     # Privater SchlÃ¼ssel
-â”œâ”€â”€ cert.pem        # Nur das Zertifikat
-â””â”€â”€ chain.pem       # Nur die Kette
+├── fullchain.pem   # Öffentlicher Schlüssel + Zertifikatskette
+├── privkey.pem     # Privater Schlüssel
+├── cert.pem        # Nur das Zertifikat
+└── chain.pem       # Nur die Kette
 ```
 
-### 4.2 Zertifikat erneuern
+### 4.2 Wildcard-Zertifikat anfordern
 
 ```bash
-sudo certbot renew
+sudo apt install certbot
+
+sudo certbot certonly --manual -d "*.phytech.de" \
+  --agree-tos --preferred-challenges dns
 ```
 
-> Nach Erneuerung: `.env` aktualisieren und Container neu starten!
-
-### 4.3 Neues Zertifikat fÃ¼r andere Domain
+Bei der Aufforderung: TXT-Record `_acme-challenge.phytech.de` im DNS-Manager eintragen und prüfen:
 
 ```bash
-sudo certbot certonly --manual -d *.neue-domain.de \
-  --agree-tos --no-bootstrap --preferred-challenges dns
+dig -t txt _acme-challenge.phytech.de @8.8.8.8
 ```
+
+> **Erst nach erfolgreicher Verifikation Enter drücken!**
+
+### 4.3 In TRMM übernehmen
+
+```bash
+sudo trmmctl cert                         # Domain aus /etc/default/trmm
+sudo trmmctl cert --export /root/npm      # zusätzlich npm-*.pem für NPM
+```
+
+Ausführlich inkl. NPM: [wartung/01-ssl-zertifikat-erneuern.md](../wartung/01-ssl-zertifikat-erneuern.md)
 
 ---
 
 ## 5. Update-Management Scripts
 
-Zwei komplementÃ¤re Scripts fÃ¼r sichere System-Updates mit automatischer Kategorisierung.
+Komplementäre Scripts für sichere System-Updates mit automatischer Kategorisierung.
+
+| Script | Pfad | Zweck |
+|--------|------|-------|
+| `update-check` | `/usr/local/bin/` | Nur prüfen und kategorisieren |
+| `server-update` | `/usr/local/sbin/` | Unkritische Updates automatisch, kritische anzeigen |
+| `apt-smart-update` | `/usr/local/sbin/` | Wie server-update, mit Timeout-Menü (auch als TRMM-Script) |
+| `pve-disk-resize` | `/usr/local/sbin/` | Root-Partition nach Disk-Vergrößerung in Proxmox erweitern |
+
+Quelltext: [usr/local/](../usr/local/)
 
 ### 5.1 Kategorisierung
 
-| PrioritÃ¤t | Beschreibung | Aktion |
+| Priorität | Beschreibung | Aktion |
 |-----------|--------------|--------|
 | **KRITISCH** (rot) | Security, Kernel, SSL, Auth | Manuelle Installation |
-| **MITTEL** (gelb) | Systemd, Netzwerk, Core | Zeitnah installieren |
-| **NIEDRIG** (grÃ¼n) | Alles andere | Automatisch installierbar |
+| **MITTEL** (gelb) | Systemd, Netzwerk, Core, Docker-Engine | Zeitnah installieren |
+| **NIEDRIG** (grün) | Alles andere | Automatisch installierbar |
 
 **KRITISCH - Pakete:**
 - `linux-image-*`, `linux-headers-*`
@@ -243,138 +299,18 @@ Zwei komplementÃ¤re Scripts fÃ¼r sichere System-Updates mit automatischer Ka
 - `systemd*`, `libudev*`, `libsystemd*`
 - `base-files`, `apt`, `dpkg`
 - `network*`, `dbus*`
+- `docker*`, `containerd*`, `runc` – ein Update startet alle TRMM-Container neu
 
 **NIEDRIG - Pakete:**
 - Normale Anwendungen
 - Unkritische Libraries
 
-### 5.2 update-check.sh - Nur prÃ¼fen
+### 5.2 Verhalten
 
-```bash
-#!/bin/bash
-# ==============================================================================
-# update-check.sh
-# Prueft auf Updates und kategorisiert nach Prioritaet
-# ==============================================================================
-# Autor:    Phydran6
-# Version:  2026-01-05
-# System:   Debian/Ubuntu
-# ==============================================================================
+- Installiert wird mit `apt-get install --only-upgrade` ohne Rückfragen (`DEBIAN_FRONTEND=noninteractive`, geänderte Config-Dateien bleiben erhalten).
+- Die Auto-Markierung von Abhängigkeiten bleibt erhalten, damit `apt autoremove` weiterhin aufräumt.
 
-# paketlisten holen
-if ! apt-get update -qq 2>/dev/null; then
-    echo "FEHLER: apt update fehlgeschlagen"
-    exit 0
-fi
-
-# updates abfragen
-UPDATES=$(apt list --upgradable 2>/dev/null | grep "/" | sort)
-
-if [ -z "$UPDATES" ]; then
-    echo "OK - keine updates"
-    exit 0
-fi
-
-# kategorien
-declare -a KRIT=() MITT=() NIED=()
-
-# einsortieren
-while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    pkg=$(echo "$line" | cut -d'/' -f1)
-    
-    # kritisch: security, kernel, ssl, auth
-    if echo "$line" | grep -qE "(security|/stable-security)"; then
-        KRIT+=("$pkg")
-    elif echo "$pkg" | grep -qiE "^(linux-image|linux-headers|openssl|libssl|grub|sudo|openssh|libpam-)"; then
-        KRIT+=("$pkg")
-    # mittel: systemd, netzwerk, paketmanager
-    elif echo "$pkg" | grep -qiE "^(systemd|libnss|libudev|libsystemd|base-files|apt|dpkg|network|udev|dbus)"; then
-        MITT+=("$pkg")
-    # niedrig: rest
-    else
-        NIED+=("$pkg")
-    fi
-done <<< "$UPDATES"
-
-# ausgabe
-TOTAL=$((${#KRIT[@]} + ${#MITT[@]} + ${#NIED[@]}))
-echo "$TOTAL UPDATE(S)"
-echo "----------------"
-[ ${#KRIT[@]} -gt 0 ] && echo "KRITISCH: ${KRIT[*]}"
-[ ${#MITT[@]} -gt 0 ] && echo "MITTEL: ${MITT[*]}"
-[ ${#NIED[@]} -gt 0 ] && echo "NIEDRIG: ${NIED[*]}"
-```
-
-### 5.3 server-update.sh - Automatisch installieren
-
-Installiert automatisch nur unkritische Pakete, zeigt kritische mit Installationsbefehl an.
-
-```bash
-#!/bin/bash
-# ==============================================================================
-# server-update.sh
-# Installiert unkritische Updates automatisch, kritische manuell
-# ==============================================================================
-# Autor:    Phydran6
-# Version:  2026-01-05
-# System:   Debian/Ubuntu
-# ==============================================================================
-
-# kritische pakete pattern
-KRITISCH_PATTERN="^(linux-image|linux-headers|openssl|libssl|libcrypto|grub|initramfs|efi|sudo|openssh|libpam-|systemd|libudev|libsystemd|libc6|libgcc|bash|coreutils|util-linux)"
-
-# paketlisten aktualisieren
-echo "=> paketlisten aktualisieren..."
-apt-get update -qq 2>/dev/null || exit 1
-
-# updates holen
-UPDATES=$(apt list --upgradable 2>/dev/null | grep "/" | sort)
-[ -z "$UPDATES" ] && { echo "OK - keine updates"; exit 0; }
-
-# kategorisieren
-declare -a AUTO=() MANUELL=()
-while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    pkg=$(echo "$line" | cut -d'/' -f1)
-    if echo "$pkg" | grep -qiE "$KRITISCH_PATTERN"; then
-        MANUELL+=("$pkg")
-    else
-        AUTO+=("$pkg")
-    fi
-done <<< "$UPDATES"
-
-# automatisch installieren
-if [ ${#AUTO[@]} -gt 0 ]; then
-    echo "=> installiere ${#AUTO[@]} unkritische(s) paket(e)..."
-    apt-get install -y "${AUTO[@]}" 2>&1 | grep -E "^(Inst|Conf)"
-fi
-
-# kritische anzeigen
-if [ ${#MANUELL[@]} -gt 0 ]; then
-    echo ""
-    echo "========================================"
-    echo "KRITISCHE UPDATES - MANUELLE INSTALLATION"
-    echo "========================================"
-    for pkg in "${MANUELL[@]}"; do
-        echo "  $pkg"
-        echo "    -> sudo apt install $pkg"
-    done
-    echo ""
-    echo "Alle kritischen auf einmal:"
-    echo "  -> sudo apt install ${MANUELL[*]}"
-fi
-
-# zusammenfassung
-echo ""
-echo "========================================"
-echo "ZUSAMMENFASSUNG"
-echo "========================================"
-echo "Installiert:     ${#AUTO[@]} paket(e)"
-echo "Uebersprungen:   ${#MANUELL[@]} paket(e) (kritisch)"
-```
-
-### 5.4 Beispiel-Ausgabe update-check.sh
+### 5.3 Beispiel-Ausgabe update-check
 
 ```
 24 UPDATE(S)
@@ -384,7 +320,7 @@ MITTEL: systemd base-files
 NIEDRIG: vim curl nginx
 ```
 
-### 5.5 Beispiel-Ausgabe server-update.sh
+### 5.4 Beispiel-Ausgabe server-update
 
 ```
 => paketlisten aktualisieren...
@@ -393,13 +329,13 @@ NIEDRIG: vim curl nginx
 ========================================
 KRITISCHE UPDATES - MANUELLE INSTALLATION
 ========================================
-  linux-image-6.1.0-18-amd64
-    -> sudo apt install linux-image-6.1.0-18-amd64
+  linux-image-6.12.48-amd64
+    -> sudo apt install --only-upgrade linux-image-6.12.48-amd64
   systemd
-    -> sudo apt install systemd
+    -> sudo apt install --only-upgrade systemd
 
 Alle kritischen auf einmal:
-  -> sudo apt install linux-image-6.1.0-18-amd64 systemd
+  -> sudo apt install --only-upgrade linux-image-6.12.48-amd64 systemd
 
 ========================================
 ZUSAMMENFASSUNG
@@ -408,11 +344,18 @@ Installiert:     12 paket(e)
 Uebersprungen:   2 paket(e) (kritisch)
 ```
 
+### 5.5 Automatisch ausführen
+
+```bash
+sudo systemctl enable --now update-check.timer   # täglich 02:00
+journalctl -u update-check                       # Ausgabe
+```
+
 ---
 
 ## 6. Pi-hole Konfiguration
 
-Pi-hole kann Docker/GitHub/Debian Mirrors blockieren. Whitelist-EintrÃ¤ge nÃ¶tig.
+Pi-hole kann Docker/GitHub/Debian Mirrors blockieren. Whitelist-Einträge nötig. `sudo trmmctl doctor` prüft die wichtigsten Domains.
 
 ### 6.1 Wichtige Whitelist-Domains
 
@@ -420,14 +363,18 @@ Pi-hole kann Docker/GitHub/Debian Mirrors blockieren. Whitelist-EintrÃ¤ge nÃ�
 # Docker
 docker.com
 docker.io
+download.docker.com
 registry.hub.docker.com
 hub.docker.com
 auth.docker.io
 registry-1.docker.io
+production.cloudflare.docker.com
 
 # GitHub
 github.com
+api.github.com
 githubusercontent.com
+raw.githubusercontent.com
 ghcr.io
 
 # Debian/Ubuntu Mirrors
@@ -441,7 +388,7 @@ mirror.netcologne.de
 letsencrypt.org
 acme-v02.api.letsencrypt.org
 
-# NPM (falls benÃ¶tigt)
+# NPM (falls benötigt)
 registry.npmjs.org
 ```
 
@@ -457,126 +404,122 @@ https://raw.githubusercontent.com/anudeepND/whitelist/master/domains/whitelist.t
 
 ### 6.3 Symptom: APT-Mirrors werden geblockt
 
-Wenn `apt update` fehlschlÃ¤gt und Domains auf `127.0.0.1` aufgelÃ¶st werden â†’ Pi-hole blockiert!
+Wenn `apt update` fehlschlägt und Domains auf `0.0.0.0` / `127.0.0.1` aufgelöst werden → Pi-hole blockiert!
 
-**LÃ¶sung:** Domains in Pi-hole Whitelist eintragen.
+**Lösung:** Domains in Pi-hole Whitelist eintragen.
 
 ---
 
 ## 7. Troubleshooting
 
-### 7.1 VM-Zeit falsch - APT schlÃ¤gt fehl
+Erster Schritt immer: `sudo trmmctl doctor` und `sudo trmmctl status`.
 
-**Symptom:** `Release-Datei ist noch nicht gÃ¼ltig`
+### 7.1 VM-Zeit falsch - APT schlägt fehl
+
+**Symptom:** `Release-Datei ist noch nicht gültig`
 
 ```bash
 # Systemzeit synchronisieren
 sudo timedatectl set-ntp true
 sleep 5
-date
+timedatectl
 
-# Falls timedatectl nicht verfÃ¼gbar
-sudo apt install ntpdate
-sudo ntpdate -s ntp.ubuntu.com
-
-# APT mit deaktivierter ZeitprÃ¼fung
+# APT mit deaktivierter Zeitprüfung (nur als Notlösung)
 sudo apt-get update -o Acquire::Check-Valid-Until=false
 ```
 
-> **âš ï¸ WICHTIG:** Systemzeit MUSS korrekt sein bevor Pakete installiert werden!
+> **⚠️ WICHTIG:** Systemzeit MUSS korrekt sein bevor Pakete installiert werden!
 
 ### 7.2 Docker Netzwerk-Konflikte
 
 ```bash
-# Alle Container stoppen
-docker compose down
-
-# Docker Netzwerke aufrÃ¤umen
+sudo trmmctl down
 docker network prune -f
-
-# Neu starten
-docker compose up -d
+sudo trmmctl up
 ```
 
-### 7.3 TRMM Init-Container hÃ¤ngt
+### 7.3 TRMM Init-Container hängt
 
 Die Initialisierung dauert 5-10 Minuten. Geduld!
 
 ```bash
-# Logs beobachten
-docker compose logs -f
-
-# Falls nach 15min noch nichts:
-docker compose down -v
-docker compose up -d
+sudo trmmctl logs init
+sudo trmmctl ps
 ```
 
-### 7.4 ANSI-Farbcodes im Terminal
+> ⚠️ Nicht mehr `docker compose down -v` verwenden – das löscht alle Volumes inklusive Datenbank. Stattdessen Logs prüfen, notfalls `trmmctl restore`.
 
-Scripts erkennen automatisch ob Terminal Farben unterstÃ¼tzt:
+### 7.4 "Volume ... fehlt, es gibt aber ..."
+
+`POSTGRES_VERSION` oder `MONGO_VERSION` in der `.env` wurde geändert (oder eine alte Installation übernommen). Daten übernehmen:
 
 ```bash
-# Am Anfang jedes Scripts:
-if [ -t 1 ] && [ "$(tput colors 2>/dev/null)" -ge 8 ]; then
+sudo trmmctl migrate-db
+```
+
+### 7.5 ANSI-Farbcodes im Terminal
+
+Scripts erkennen automatisch ob Terminal Farben unterstützt (wichtig für die TRMM-Ausgabe):
+
+```bash
+if [ -t 1 ]; then
     RED='\033[0;31m' GREEN='\033[0;32m' NC='\033[0m'
 else
     RED='' GREEN='' NC=''
 fi
 ```
 
-### 7.5 .env Datei hat falsche Berechtigungen
+### 7.6 .env Datei hat falsche Berechtigungen
 
 ```bash
-# Besitzer Ã¤ndern
-sudo chown $USER:$USER .env
-sudo chmod 644 .env
+sudo chown root:root /opt/trmm/.env
+sudo chmod 600 /opt/trmm/.env
 ```
 
-### 7.6 Docker-Gruppe nicht aktiv
+### 7.7 MongoDB startet nicht ("Illegal instruction")
 
-Nach `usermod -aG docker $USER` neu anmelden oder:
+MongoDB ab 5.0 braucht eine CPU mit AVX. Der Proxmox-Default-CPU-Typ (`x86-64-v2-AES`/`kvm64`) reicht nicht.
 
-```bash
-newgrp docker
-```
+Der Installer prüft das vorab und bricht ohne AVX ab, ohne etwas zu verändern.
+
+- **Lösung:** VM herunterfahren → Hardware → Prozessor → Typ `host` oder `x86-64-v3` → VM starten → Installer erneut ausführen.
+- **Prüfen:** `grep -cw avx /proc/cpuinfo` muss größer als 0 sein.
 
 ---
 
 ## 8. Quick Reference
 
-### 8.1 Docker Befehle
+### 8.1 trmmctl
 
 ```bash
-docker compose up -d        # Starten (detached)
-docker compose down          # Stoppen
-docker compose down -v       # Stoppen + Volumes lÃ¶schen
-docker compose logs -f       # Live-Logs
-docker compose ps            # Status
-docker compose restart       # Neu starten
-docker compose exec <svc> sh # Shell in Container
+sudo trmmctl status            # Versionen, Container, Zertifikat, letztes Backup
+sudo trmmctl up|down|restart   # Stack steuern
+sudo trmmctl logs [dienst]     # z.B. logs init backend
+sudo trmmctl update [version]  # Backup + neues Release
+sudo trmmctl cert [domain]     # Zertifikat übernehmen + Neustart
+sudo trmmctl backup            # Backup nach /var/backups/trmm
+sudo trmmctl restore <datei>   # Backup einspielen
+sudo trmmctl migrate-db        # alte DB-Volumes übernehmen
+sudo trmmctl doctor            # Systemcheck
+sudo trmmctl createsuperuser   # weiterer Admin
+sudo trmmctl compose <args>    # beliebiger docker compose Befehl
 ```
 
-### 8.2 TRMM Container
+### 8.2 Docker Befehle (im Projekt)
 
 ```bash
-# Django Shell fÃ¼r User-Management
-sudo docker exec -it trmm-backend python manage.py shell
-
-# User erstellen (in Shell)
-from accounts.models import User
-User.objects.create_superuser('admin', 'mail@domain.de', 'password')
-exit()
+cd /opt/trmm
+sudo docker compose ps               # Status
+sudo docker compose logs -f          # Live-Logs
+sudo docker compose exec <svc> sh    # Shell in Container
 ```
 
 ### 8.3 Certbot
 
 ```bash
 # Neues Wildcard-Zertifikat
-sudo certbot certonly --manual -d *.domain.de \
-  --agree-tos --no-bootstrap --preferred-challenges dns
-
-# Zertifikate erneuern
-sudo certbot renew
+sudo certbot certonly --manual -d "*.domain.de" \
+  --agree-tos --preferred-challenges dns
 
 # Zertifikate auflisten
 sudo certbot certificates
@@ -585,68 +528,28 @@ sudo certbot certificates
 ### 8.4 Systemzeit
 
 ```bash
-timedatectl                  # Status anzeigen
+timedatectl                   # Status anzeigen
 sudo timedatectl set-ntp true # NTP aktivieren
-date                         # Aktuelle Zeit
 ```
 
 ### 8.5 Wichtige Pfade
 
-```
-~/tactical-rmm/                      # TRMM Installation
-~/tactical-rmm/.env                  # TRMM Konfiguration
-~/tactical-rmm/docker-compose.yml
-
-/etc/letsencrypt/live/phytech.de/    # SSL-Zertifikate
-/usr/local/lib/docker/cli-plugins/   # Docker Compose Plugin
-```
-
-### 8.6 TRMM Docker Setup Kurzform
-
-```bash
-# 1. Docker installieren
-sudo apt install docker.io
-sudo mkdir -p /usr/local/lib/docker/cli-plugins
-sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-  -o /usr/local/lib/docker/cli-plugins/docker-compose
-sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-# 2. Certbot Wildcard-Cert
-sudo apt install certbot
-sudo certbot certonly --manual -d *.phytech.de --agree-tos --no-bootstrap --preferred-challenges dns
-
-# 3. TRMM Setup
-mkdir ~/tactical-rmm && cd ~/tactical-rmm
-wget https://raw.githubusercontent.com/amidaware/tacticalrmm/master/docker/docker-compose.yml
-wget https://raw.githubusercontent.com/amidaware/tacticalrmm/master/docker/.env.example
-mv .env.example .env
-
-# 4. Certs in .env
-echo "CERT_PUB_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/phytech.de/fullchain.pem)" >> .env
-echo "CERT_PRIV_KEY=$(sudo base64 -w 0 /etc/letsencrypt/live/phytech.de/privkey.pem)" >> .env
-
-# 5. .env anpassen, dann starten
-docker compose up -d
-
-# 6. User via Shell erstellen (Init dauert 5-10min!)
-sudo docker exec -it trmm-backend python manage.py shell
-# from accounts.models import User
-# User.objects.create_superuser('admin', 'admin@example.com', 'pass')
-```
+Siehe [1.4 Verzeichnisse auf dem Server](#14-verzeichnisse-auf-dem-server).
 
 ---
 
 ## Anhang: Key Learnings
 
-1. **Systemzeit ist kritisch** - Vor jeder Installation prÃ¼fen!
-2. **Docker Compose v2** - Manuelles Plugin, nicht Debian-Paket
+1. **Systemzeit ist kritisch** - Vor jeder Installation prüfen (macht der Installer)!
+2. **Docker aus dem offiziellen Repository** - nicht das alte `docker-compose` v1
 3. **TRMM Init dauert** - 5-10 Minuten Geduld
-4. **User nur via Shell** - Web-UI funktioniert bei Docker nicht zuverlÃ¤ssig
-5. **Pi-hole kann blockieren** - Whitelist fÃ¼r Docker/GitHub/Mirrors
-6. **Pattern Matching > apt-upgrade** - FÃ¼r Paket-Kategorisierung zuverlÃ¤ssiger
-7. **Farben auto-detect** - FÃ¼r TRMM-KompatibilitÃ¤t
+4. **Pi-hole kann blockieren** - Whitelist für Docker/GitHub/Mirrors
+5. **Pattern Matching > apt-upgrade** - Für Paket-Kategorisierung zuverlässiger
+6. **Farben auto-detect** - Für TRMM-Kompatibilität
+7. **AVX für MongoDB** - Proxmox CPU-Typ `host`
+8. **Major-Versionen von Datenbanken nie "einfach hochdrehen"** - immer Dump/Restore (`trmmctl migrate-db`)
 
 ---
 
-*Dokumentation erstellt: Februar 2026*  
+*Dokumentation erstellt: Februar 2026, überarbeitet Oktober 2026*  
 *Phydran6*
